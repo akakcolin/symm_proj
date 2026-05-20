@@ -73,9 +73,18 @@ contains
 
     if(steer(11) .ne. 0) then
        ! if steer(11) is true, the multiplication table will be printed, row by row
-       write(*,*) "The group multiplication table:"
+       write(*,*)
+       write(*,*) "=========================================="
+       write(*,*) "Group Multiplication Table"
+       write(*,*) "=========================================="
+       write(*,*) "Row x Column = Result"
+       write(*,*)
        do I= 1, G
-          write(*,*) mtab2(I,1:G)
+          if (G <= 48) then
+             write(*,'(48I3)') mtab2(I,1:G)
+          else
+             write(*,'(100I3)') mtab2(I,1:G)
+          end if
        end do
     end if
     ! The inverse group elements are calculted and stored in inel(J)

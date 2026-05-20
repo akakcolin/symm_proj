@@ -54,7 +54,14 @@ contains
 
     !rk(1:3) = ark(1:3)*2*pi
     srk(1:3) = ark(1:3)
-    write(*,*) "order", order
+    if (steer(18) == 1) then
+       write(*,*)
+       write(*,*) "=========================================="
+       write(*,*) "K-point Group Analysis"
+       write(*,*) "=========================================="
+       write(*,'(A,I6)') " Group order: ", order
+       write(*,*)
+    end if
     allocate(inverk(order))
     allocate(tmp_kgel(order))  ! Use actual group order instead of hardcoded 230
     inverk(:) = 1
@@ -142,7 +149,9 @@ contains
           mtab2(I, J) = inverk(mtab2(I, J))
        end do
     end do
-    write(*,*) "section 3"
+    if (steer(18) == 1) then
+       write(*,*) "K-point symmetry analysis completed"
+    end if
 
     ! section 3
     ! tests for the nonsymmorphic space group
@@ -155,14 +164,20 @@ contains
 
        if (ntz > 0) then
           ! k - vector outside Bz
-          write(*,*) rk(1:3), "outside the Bz"
+          write(*,*)
+          write(*,*) "=========================================="
+          write(*,*) "WARNING: K-point Outside Brillouin Zone"
+          write(*,*) "=========================================="
+          write(*,'(A,3F12.6)') " K-point: ", rk(1:3)
+          write(*,*)
           return
        end if
 
        if (ntz < 0) then
           ibz = 1
           if (steer(18) .eq. 1) then
-             write(*,*) "Nonsymmorphic, but within Bz"
+             write(*,*)
+             write(*,*) "Note: Nonsymmorphic space group, k-point within BZ"
           end if
        end if
 
@@ -187,7 +202,8 @@ contains
        if (I > kgord) then
           ksym = 1
           if (steer(18) .eq. 1) then
-             write(*,*) "Nonsymmorphic, but symmorph Gk"
+             write(*,*)
+             write(*,*) "Note: Nonsymmorphic space group with symmorphic Gk"
           end if
        end if
 

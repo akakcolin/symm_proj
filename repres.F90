@@ -106,9 +106,19 @@ contains
     allocate(ntry2(G))
 
     grupel(:,:,:)= 0
-    
+
     ncl1 = ncl - 1
-    write(*,*) "lj", lj
+    if (steer(7) .ne. 0) then
+       write(*,*)
+       write(*,*) "=========================================="
+       write(*,*) "Representation Dimensions"
+       write(*,*) "=========================================="
+       write(*,*) "Dimension of each irreducible representation:"
+       do I = 1, ncl, 12
+          write(*,'(12I6)') lj(I:min(I+11, ncl))
+       end do
+       write(*,*)
+    end if
     do I = 1, ncl
        laj(I) = lj(I)
        n2(I) = I
@@ -129,8 +139,16 @@ contains
     end do
 
     if(steer(7) .ne. 0) then
-       write(*,*) "New representation numbering 1:", ncl
-       write(*,*) "Olod representation numbering", n2(1:ncl)
+       write(*,*)
+       write(*,*) "=========================================="
+       write(*,*) "Representation Renumbering"
+       write(*,*) "=========================================="
+       write(*,'(A,I6)') " Number of representations: ", ncl
+       write(*,*) "Old representation numbering:"
+       do I = 1, ncl, 12
+          write(*,'(12I6)') n2(I:min(I+11, ncl))
+       end do
+       write(*,*)
     end if
 
     pi2i = cmplx(0, 2*pi)

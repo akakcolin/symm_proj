@@ -108,14 +108,27 @@ contains
           end do
        end if
     end do
-    write(*,*) "inel", inel(:)
+    write(*,*)
+    write(*,*) "=========================================="
+    write(*,*) "Inverse Elements"
+    write(*,*) "=========================================="
+    write(*,*) "Element -> Inverse:"
+    do I = 1, G, 12
+       write(*,'(12I6)') inel(I:min(I+11, G))
+    end do
+
     do I = 1, G
        if(inel(I) ==  0) then
-          write(*,*) "No inverse element for group element", I
-          write(*,*) "multab(" , G, ") is "
+          write(*,*)
+          write(*,*) "=========================================="
+          write(*,*) "ERROR: Missing Inverse Element"
+          write(*,*) "=========================================="
+          write(*,'(A,I6)') " No inverse found for element: ", I
+          write(*,*)
+          write(*,'(A,I6,A)') " Multiplication table (", G, " elements):"
           do II = 1, G
-            write(*,*) multab(:, II)
-          end do 
+            write(*,'(100I3)') multab(:, II)
+          end do
        end if
     end do
   end subroutine sym_inverse

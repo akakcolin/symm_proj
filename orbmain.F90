@@ -498,12 +498,20 @@ program main
      read(fh, *) a(I,1), a(I,2), a(I,3)
   end do
 
-  write(*,*) "Input, crystal with unit cell vectors"
+  write(*,*)
+  write(*,*) "=========================================="
+  write(*,*) "STEP 1: Crystal Structure Input"
+  write(*,*) "=========================================="
+  write(*,*) "Reading crystal structure from input file..."
+  write(*,*)
+  write(*,*) "Unit cell vectors (in Cartesian coordinates):"
   do I = 1, 3
-     write(*,*) a(I,:)
+     write(*,'(A,I1,A,3F12.6)') "  a", I, " = ", a(I,:)
   end do
 
-  write(*,*) "Reciprocal unit cell vectors are"
+  write(*,*)
+  write(*,*) "Computing reciprocal lattice vectors..."
+  write(*,*) "(Used for k-point transformations)"
 
   T = 2*pi
 
@@ -512,8 +520,10 @@ program main
   bi = transpose(a)
   ai = transpose(b)
 
+  write(*,*)
+  write(*,*) "Reciprocal unit cell vectors:"
   do I = 1, 3
-     write(*,*) b(I, :)
+     write(*,'(A,I1,A,3F12.6)') "  b", I, " = ", b(I, :)
   end do
 
   ! section 1.5
@@ -530,7 +540,18 @@ program main
   end do
 
   ! section 1.7
-  write(*,*) 'The unit cell contains', nel, ' chemical elements\n'
+  write(*,*)
+  write(*,*) "=========================================="
+  write(*,*) "STEP 2: Chemical Composition"
+  write(*,*) "=========================================="
+  write(*,'(A,I3,A)') " The unit cell contains ", nel, " chemical element(s)"
+  write(*,*)
+  write(*,*) "Maximum orbital quantum number L for each element:"
+  do I = 1, nel
+     write(*,'(A,I2,A,I2)') "  Element ", I, ": L_max = ", lmax(I)
+  end do
+  write(*,*)
+  write(*,*) "Number of atoms for each element:"
   !pgnr is the index number of the point group, 1=C1, 2=S2, 3 = C2,
   !4 =Cs, 5=C2h, 6=D2, 7=C2v, 8=D2h, 9=C4, 10=S4, 11=C4h, 12=D4, 13=C4v,
   ! 14=D2d, 15=D4h, 16=C3, 17=S6, 18=D3 (for space groups 149, 151, 153),
@@ -548,21 +569,29 @@ program main
   do I = 1, nel
      read(fh,*) nat(I)
   end do
+  do I = 1, nel
+     write(*,'(A,I2,A,I3,A)') "  Element ", I, ": ", nat(I), " atom(s)"
+  end do
   !write(*,*)"nat", nat(:)
 
+  write(*,*)
+  write(*,*) "Reading atomic positions..."
   allocate(r(3,nel,maxval(nat)))
   ! nat(I) is the number of atoms of chemical elements I, per nuit cell
   ! section 1.9
   do I = 1, nel
      K = nat(I)
+     write(*,'(A,I2,A)') "  Element ", I, " positions:"
      do J = 1, K
         read(fh, *) atco
         read(fh, *) r(:,I, J)
-        write(*,*) r(:,I,J)
         ! atco = 1 means cartesian coordinates, atco = 0 means lattice coordinates
         if (atco .ne. 1) then
            tsk(1:3) = r(:, I, J)
            r(:,I, J) = matmul(a(:,:), tsk)
+           write(*,'(A,I3,A,3F10.5,A)') "    Atom ", J, ": ", tsk(1:3), " (lattice)"
+        else
+           write(*,'(A,I3,A,3F10.5,A)') "    Atom ", J, ": ", r(:,I, J), " (Cartesian)"
         end if
         !write(*,*) "r(:, I, J), tsk", r(:,I, J), tsk(1:3)
      end do
@@ -620,24 +649,34 @@ program main
   end if
 
   ! section 1.14
+  write(*,*)
+  write(*,*) "=========================================="
+  write(*,*) "STEP 3: Point Group Identification"
+  write(*,*) "=========================================="
+  write(*,'(A,I3)') " Point group number: ", pgnr
   if (( pgnr >=16) .and. (pgnr <=31)) then
      allocate(mtab(24, 24))
      mtab(:,:) = 0
      mtab(:,:) = MD6h(:,:)
      K48 = 48
      write(*,*)
-     write(*,*) 'Point group (no.', pgnr, ') is a subgroup of D6h'
+     write(*,*) "This point group is a subgroup of D6h (hexagonal symmetry)"
+     write(*,*) "Using D6h multiplication table as reference"
   else
      allocate(mtab(48, 48))
      mtab(:,:) = 0
      mtab(:,:) = MOh(:,:)
      K48= 0
      write(*,*)
-     write(*,*) 'Point group (no.', pgnr, ') is a subgroup of Oh'
+     write(*,*) "This point group is a subgroup of Oh (cubic symmetry)"
+     write(*,*) "Using Oh multiplication table as reference"
   end if
 
   ! section 1.17
+  write(*,*)
+  write(*,*) "Constructing multiplication table for this specific point group..."
   if( (pgnr .ne. 31) .and. (pgnr .ne. 36)) then
+     write(*,*) "(Extracting subgroup elements from parent group)"
      ! inver gives the numbering of the elements in the specific point
      ! group. Example: in the group 5=C2h, element 28 is the 4th
      ! element of the group, so inver(28)=4.
@@ -657,20 +696,27 @@ program main
            mtab(I,J) = inver(mtab(I,J))
         end do
      end do
+  else
+     write(*,*) "(Using full parent group: D6h or Oh)"
   end if
 
   ! section 1.18
   write(*,*)
   write(*,*) "=========================================="
-  write(*,*) "Group Elements"
+  write(*,*) "STEP 4: Group Elements and Symmetry Operations"
   write(*,*) "=========================================="
+  write(*,'(A,I3,A)') " Total number of symmetry operations: ", order, " elements"
+  write(*,*)
   write(*,*) "Element numbers in the point group:"
+  write(*,*) "(These index the symmetry operations)"
   ! Print group elements in rows of 12
   do I = 1, order, 12
      write(*,'(12I6)') gel(I:min(I+11, order))
   end do
   write(*,*)
-  write(*,*) "Maximum orbital quantum number L:", lmax(:)
+  write(*,*) "Orbital basis set information:"
+  write(*,*) "Maximum orbital quantum number L for each element:", lmax(:)
+  write(*,*) "(L=0: s-orbitals, L=1: p-orbitals, L=2: d-orbitals, L=3: f-orbitals)"
 
   ! section 1.19
   ! load the rotation matrices for the orthogonal coordinate system
@@ -696,7 +742,9 @@ program main
      end do
      matrixorder = matrixorder + nat(ichem)*N
   end do
-  write(*,*) "matrixorder =", matrixorder
+  write(*,*)
+  write(*,'(A,I5)') " Total basis function dimension: ", matrixorder
+  write(*,*) "(This is the size of the Hamiltonian matrix to be diagonalized)"
   allocate(projmatrix(number_of_wave_vectors, matrixorder, matrixorder))
 
   do I = 1, number_of_wave_vectors
@@ -705,14 +753,25 @@ program main
      !   projmatrix(I, II, II) = 1
      !end do     
   end do
-  
-  
+
+  write(*,*)
+  write(*,*) "=========================================="
+  write(*,*) "STEP 5: K-point Loop and Symmetry Analysis"
+  write(*,*) "=========================================="
+  write(*,'(A,I3,A)') " Processing ", number_of_wave_vectors, " k-point(s)..."
+  write(*,*)
+
   do ikp = 1, number_of_wave_vectors
      rk(1:3) = all_kpoints(ikp,:)
      ark(1:3) = rk(1:3)
      srk(1:3) = rk(1:3)
      IV = 1
      ibz = 1   ! test
+
+     write(*,*)
+     write(*,*) "------------------------------------------"
+     write(*,'(A,I3,A,3F10.5)') " K-point ", ikp, ": ", all_kpoints(ikp,:)
+     write(*,*) "------------------------------------------"
 
      allocate(nopli1(100))
      nopli1(:) = 1;
@@ -724,12 +783,17 @@ program main
         ! rk(1:3) is gamma point
         ! section for the case of zero wave vector. then the point group of thw wave vector
         ! is equal to the point group of the space group
+        write(*,*)
+        write(*,*) "This is the Gamma point (k=0)"
+        write(*,*) "The little group equals the full point group"
         kgord = order
         mtab2(1:kgord, 1:kgord) = mtab(1:kgord, 1:kgord)
         write(*,*)
         write(*,*) "=========================================="
-        write(*,*) "Multiplication Table"
+        write(*,*) "Multiplication Table for Little Group"
         write(*,*) "=========================================="
+        write(*,'(A,I3,A)') " Group order: ", kgord, " elements"
+        write(*,*)
         do I = 1, kgord
            write(*,'(48I3)') mtab(i,1:kgord)
         end do
@@ -742,6 +806,9 @@ program main
         ibz = 1
         kg = kgord
      else
+        write(*,*)
+        write(*,*) "This is a general k-point (not Gamma)"
+        write(*,*) "Computing the little group (symmetries that leave k invariant)..."
         sil(1)= cmplx(1, 0)
         kgel(1) = 1
         kgord= 1
@@ -751,6 +818,7 @@ program main
         call sym_groupkp(kg, kgord, k2gord, kgel, kkgel, mtab2, ibz, listp, &
              & nopi, nopi1, nopli, nopli1, sil, til, ksym, rk, ark, a, ai, b,bi, u, order,pgnr, &
              & rgr, mtab, gel, steer, tsmall)
+        write(*,'(A,I3,A)') " Little group order: ", kg, " elements"
      end if
 
      ! section 6
@@ -759,25 +827,27 @@ program main
 
      write(*,*)
      write(*,*) "=========================================="
-     write(*,*) "Projection Matrices"
+     write(*,*) "STEP 6: Irreducible Representations"
      write(*,*) "=========================================="
-     write(*,'(A,3F10.6)') " Wave vector: ", srk(1:3)
+     write(*,*) "Computing character table and irreducible representations..."
+     write(*,'(A,3F10.6)') " Wave vector k: ", srk(1:3)
      write(*,*)
-     write(*,'(A,I4,A)') " Point group of wave vector: ", kg, " operators"
-     write(*,*) "Operator indices:"
+     write(*,'(A,I4,A)') " Little group has ", kg, " symmetry operators"
+     write(*,*) "Operator indices in the full point group:"
      do I = 1, kg, 12
         write(*,'(12I6)') kkgel(I:min(I+11, kg))
      end do
      write(*,*)
 
-     is_ski = ((steer(20) .ne. 0) .or. (ksym .ne. 0) .or. (ibz .ne. 0)) 
+     is_ski = ((steer(20) .ne. 0) .or. (ksym .ne. 0) .or. (ibz .ne. 0))
      if (.not. is_ski) then
 
-        write(*,*) " "
-        write(*,*) "The factor group Gk/Tk consists of"
+        write(*,*)
+        write(*,*) "Factor group Gk/Tk (for nonsymmorphic space groups):"
+        write(*,*) "(Symmetry operations with nonprimitive translations)"
         do I = 1, kgord
-           write(*,*) I, "pointgroup operator: ", kkgel(listp(I))
-           write(*,*) "nonprimitive translation: (", til(I, 1:3), "), exp = ", sil(I)
+           write(*,'(A,I3,A,I4)') "  Element ", I, ": Point group operator ", kkgel(listp(I))
+           write(*,'(A,3F8.4,A,2F8.4,A)') "    Translation: (", til(I, 1:3), "), Phase factor: ", sil(I), ")"
         end do
      end if
 
@@ -786,7 +856,11 @@ program main
     ! group Gk/Tk.
     
     !Next we determine all (allowable) irreducible representations of this finite group.
-    
+
+    write(*,*)
+    write(*,*) "Computing irreducible representations of the little group..."
+    write(*,*) "(This determines how states transform under symmetry operations)"
+
     allocate(cind_invp(kgord))
     if ((IV <= 2) .or. is_ski) then
        allocate(jpdd(kgord,kgord,kgord))
@@ -796,6 +870,8 @@ program main
        jpdd(:,:,:)=0
        ! section 6.2
        call sym_irrep(jpdd, allow, ncl, laj, cind_invp, kgord, mtab2, npri, steer, ibz, ksym, nopi1, nopli1, sil)
+
+       write(*,'(A,I3,A)') " Found ", ncl, " conjugacy classes"
 
        !allocate(laj(ncl))
        !allocate(allow(ncl))
@@ -807,7 +883,7 @@ program main
        ! calculationdeallocate(tmp_laj)
        !deallocate(tmp_allow)
       
-       allocate(nalr(ncl)) 
+       allocate(nalr(ncl))
        if (steer(11) == 0) then
           exit
        end if
@@ -820,7 +896,14 @@ program main
              nup = nup + laj(I)
           end if
        end do
+
+       write(*,'(A,I3,A)') " Total irreducible representations: ", nip, " (including all dimensions)"
+       write(*,'(A,I3,A)') " Allowed representations: ", nup, " (physically realizable)"
+
        if ( nip .ne. nup) then
+          write(*,*)
+          write(*,*) "Note: Some representations are not allowed due to time-reversal"
+          write(*,*) "or other physical constraints"
           nal = 0
           do I = 1, ncl
              if (allow(I) .ne. 0) then
@@ -834,34 +917,72 @@ program main
        do ilmax = 1, nel
           nblock = nblock + lmax(ilmax) + 1
        end do
-       write(*,*) " "
-       write(*,*) "There are ", nup
-       write(*,*) "projection matrices for the wave vector"
-       write(*,*)" with index J for the irreps and index JD for the diagonal elements of the irrep."
-
-       write(*,*) "Each projection matrix is blockdiagonalized with respect to the indices ichem = 1, ", nel
-       write(*,*) "and L = ", lmax(1:nel), ", so each projection matrix consists of", nblock
-       write(*,*) "subblocks of sub-projection matrices along the main diagonal. "
-       write(*,*) "These are independently orthonormalised into suh-T-matrices, from which the "
-       write(*,*) "complete T-matrix can be constructed"
-
+       write(*,*)
+       write(*,*) "=========================================="
+       write(*,*) "STEP 7: Projection Matrix Construction"
+       write(*,*) "=========================================="
+       write(*,'(A,I3,A)') " Constructing ", nup, " projection matrices"
+       write(*,*) "(One for each allowed irreducible representation)"
+       write(*,*)
+       write(*,*) "Matrix structure:"
+       write(*,'(A,I3,A)') "  - Block-diagonalized for ", nel, " chemical element(s)"
+       write(*,'(A,I3,A)') "  - Total of ", nblock, " orbital blocks"
+       write(*,*) "  - L quantum numbers:", lmax(1:nel)
+       write(*,*)
+       write(*,*) "Computing symmetry-adapted basis functions..."
 
        call sym_sumsets( np, nvec, npl, til, kgord, kgel, rgr, listp, a, ai, b, r, u, nel, nat, ksym, ibz, steer)
 
+       write(*,*) "Building projection matrices..."
        call sym_projmat(laj, kgord, allow, jpdd, projmatrix(ikp,:,:), nvec, nat, lmax, np, nel, ncl, npl, &
             & kgel, kkgel, listp, steer, ksym, ibz, K48, ldrmm, rk, u,tsmall, ttsmall)
 
        write(*,*)
        write(*,*) "=========================================="
-       write(*,*) "Projection Matrix"
+       write(*,*) "Projection Matrix Result"
        write(*,*) "=========================================="
-       write(*,'(A,I3,A,3F8.4)') " K-point ", ikp, ": ", all_kpoints(ikp,:)
-       write(*,*) "Matrix dimension:", matrixorder, "x", matrixorder
+       write(*,*) "This matrix projects the Hamiltonian onto symmetry-adapted"
+       write(*,*) "basis functions, enabling block-diagonalization by symmetry."
        write(*,*)
-        100 FORMAT(12('(',F6.3,',',F6.3,')'))
-       do I = 1, matrixorder
-          write(*,100) projmatrix(ikp, I, :)
-       end do
+       write(*,'(A,I3,A,3F8.4)') " K-point ", ikp, ": ", all_kpoints(ikp,:)
+       write(*,'(A,I5,A,I5)') " Matrix dimension: ", matrixorder, " x ", matrixorder
+       write(*,*)
+
+       ! Display column headers (every 6 columns)
+       if (matrixorder <= 60) then
+          write(*,'(A6)', advance='no') "Row"
+          do K1 = 1, min(matrixorder, 6)
+             write(*,'(A20)', advance='no') "Col " // trim(adjustl(char(48+K1)))
+          end do
+          write(*,*)
+          write(*,*) repeat("-", 6 + min(matrixorder, 6) * 20)
+
+          ! Display matrix in blocks of 6 columns
+          do K2 = 1, matrixorder, 6
+             if (K2 > 1) then
+                write(*,*)
+                write(*,'(A6)', advance='no') "Row"
+                do K1 = K2, min(K2+5, matrixorder)
+                   write(*,'(A19,I1)', advance='no') "Col ", K1
+                end do
+                write(*,*)
+                write(*,*) repeat("-", 6 + min(6, matrixorder-K2+1) * 20)
+             end if
+
+             do I = 1, matrixorder
+                write(*,'(I6)', advance='no') I
+                do K1 = K2, min(K2+5, matrixorder)
+                   write(*,'(A1,F8.4,A1,F8.4,A1)', advance='no') &
+                        "(", real(projmatrix(ikp, I, K1)), ",", aimag(projmatrix(ikp, I, K1)), ")"
+                end do
+                write(*,*)
+             end do
+          end do
+       else
+          ! For very large matrices, just show dimensions
+          write(*,*) "Matrix too large to display (dimension > 60)"
+          write(*,*) "Use output file for full matrix data"
+       end if
        write(*,*)
 
 

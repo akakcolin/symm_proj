@@ -651,12 +651,44 @@ contains
              write(*,*) "Projection Matrix"
              write(*,*) "=========================================="
              write(*,'(A,I3,A,3F8.4)') " K-point ", ikp, ": ", kpoints(ikp,:)
-             write(*,*) "Matrix dimension:", matrixorder, "x", matrixorder
+             write(*,'(A,I5,A,I5)') " Matrix dimension: ", matrixorder, " x ", matrixorder
              write(*,*)
-100          FORMAT(12('(',F6.3,',',F6.3,')'))
-             do I = 1, matrixorder
-                write(*,100) projmatrix(:,I, ikp)
-             end do
+
+             ! Display column headers (every 6 columns)
+             if (matrixorder <= 60) then
+                write(*,'(A6)', advance='no') "Row"
+                do K1 = 1, min(matrixorder, 6)
+                   write(*,'(A20)', advance='no') "Col " // trim(adjustl(char(48+K1)))
+                end do
+                write(*,*)
+                write(*,*) repeat("-", 6 + min(matrixorder, 6) * 20)
+
+                ! Display matrix in blocks of 6 columns
+                do K2 = 1, matrixorder, 6
+                   if (K2 > 1) then
+                      write(*,*)
+                      write(*,'(A6)', advance='no') "Row"
+                      do K1 = K2, min(K2+5, matrixorder)
+                         write(*,'(A19,I1)', advance='no') "Col ", K1
+                      end do
+                      write(*,*)
+                      write(*,*) repeat("-", 6 + min(6, matrixorder-K2+1) * 20)
+                   end if
+
+                   do I = 1, matrixorder
+                      write(*,'(I6)', advance='no') I
+                      do K1 = K2, min(K2+5, matrixorder)
+                         write(*,'(A1,F8.4,A1,F8.4,A1)', advance='no') &
+                              "(", real(projmatrix(K1, I, ikp)), ",", aimag(projmatrix(K1, I, ikp)), ")"
+                      end do
+                      write(*,*)
+                   end do
+                end do
+             else
+                ! For very large matrices, just show dimensions
+                write(*,*) "Matrix too large to display (dimension > 60)"
+                write(*,*) "Use output file for full matrix data"
+             end if
              write(*,*)
           end if
 

@@ -83,16 +83,25 @@ contains
     matrix_size = int(maxval(nat), 8) * 7_8 * int(maxval(nat), 8) * 7_8 * 4_8 * &
                   int(nel, 8) * int(ncl, 8) * int(maxval(laj), 8)
     if (matrix_size > 1000000000_8) then  ! > 1 billion elements (~16 GB)
-       write(*,*) "Warning: hugematrix requires large memory:", matrix_size, "complex elements"
-       write(*,*) "Estimated memory: ", matrix_size * 16 / (1024**3), "GB"
+       write(*,*)
+       write(*,*) "=========================================="
+       write(*,*) "WARNING: Large Memory Allocation"
+       write(*,*) "=========================================="
+       write(*,'(A,I15,A)') " Matrix elements: ", matrix_size, " (complex)"
+       write(*,'(A,F10.2,A)') " Estimated memory: ", real(matrix_size * 16) / (1024**3), " GB"
+       write(*,*)
     end if
 
     allocate(hugematrix(maxval(nat)*7, maxval(nat)*7, 4, nel, ncl, maxval(laj)), &
              stat=alloc_stat)
     if (alloc_stat /= 0) then
-       write(*,*) "Error: Failed to allocate hugematrix"
-       write(*,*) "Required dimensions:", maxval(nat)*7, maxval(nat)*7, 4, nel, ncl, maxval(laj)
-       write(*,*) "Estimated memory:", matrix_size * 16 / (1024**2), "MB"
+       write(*,*)
+       write(*,*) "=========================================="
+       write(*,*) "ERROR: Memory Allocation Failed"
+       write(*,*) "=========================================="
+       write(*,'(A,6I6)') " Required dimensions: ", maxval(nat)*7, maxval(nat)*7, 4, nel, ncl, maxval(laj)
+       write(*,'(A,F10.2,A)') " Estimated memory: ", real(matrix_size * 16) / (1024**2), " MB"
+       write(*,*)
        error stop "Memory allocation failed"
     end if
 
