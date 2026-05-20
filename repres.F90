@@ -259,7 +259,7 @@ contains
                                end if
                             end if
                          end do
-                         if(abs(RINAB - 1) >= 0.001)  then
+                         if(abs(RINAB - 1) >= tol_irrep_phase)  then
                             IV = IV + 1
                             fi(1:G, IV) = vec(1:G)
                          end if
@@ -370,7 +370,7 @@ contains
              N7 = nopli1(N6)
              N8 = 1
              do while (N8 <= LJ1)
-                if(abs(sil(N7) - grupel(N8, N8, N7)) > 0.001) THEN
+                if(abs(sil(N7) - grupel(N8, N8, N7)) > tol_irrep_phase) THEN
                    exit
                 end if
                 N8 = N8 + 1

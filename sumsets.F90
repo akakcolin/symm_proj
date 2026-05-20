@@ -36,7 +36,10 @@ contains
 
     integer :: I, I1, I2, I3, I4, I5, I6, I7, I8, II 
     integer :: J, isign, K, ifd
+    integer :: match_atom
+    integer :: match_count
     real(dp) ::  D
+    real(dp), dimension(3) :: mapped_shift
 
     !allocate(nvec(nel, nat(I1), nat(I1),tmp_dim, 3))
 
@@ -52,7 +55,6 @@ contains
           !I1 is the atom row index
           np(I, I1, 1:J) = 0
           I2 = 0
-!!!!!!!!!!!!!!!!!!!!!!!!!!!! need to check  whether is right !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
           do while (I2 < kgord)
              I2 = I2 + 1
              ! I2 is the index of elements of groupk
@@ -79,68 +81,79 @@ contains
                    !write(*,*) "rgr, r", rgr(I6, I7, I4), r(I, I1, I7)
                 end do
              end do
-             
-             I8 = 1
-             do while( I8 <= J)
-                ! i9 is the atom column index
-                do II = 1, 3
-                   dif(II) = trac(II) - r(II, I, I8)
-                end do
-                !todo check
-                do II = 1, 3
-                   difi(II) = ai(1,II)*dif(1) + ai(2, II)*dif(2) + ai(3,II)*dif(3)
-                   !dot_product(ai(1:3, II), dif(1:3))
-                end do
-                !difi(1:3) = matmul(dif(1:3), ai(1:3, 1:3))
-                ! transform to lattice coordinates. Test if difi is a lattice vector
 
-                do II = 1, 3
-                   isign = 1
-                   if (difi(II) < 0) then
-                      isign = -1
-                   end if
-                   D = isign*difi(II)
+             call find_unique_atom_mapping(trac, r(:, I, 1:J), J, ai, tol_lattice_integer, &
+                  & match_atom, mapped_shift, match_count)
 
-                   if (D>0) then ! fix(D)
-                      ifd = floor(D)
-                   else
-                      ifd = ceiling(D)
-                   end if
+             if (match_count /= 1) then
+                write(*,*) "Wrong space group or ambiguous atom mapping", I, I1, I2, I4
+                error stop "Invalid atom mapping"
+             end if
 
-                   if ((D - ifd) >= 0.98) then
-                      ifd = ifd + 1
-                   end if
-                   if (abs(D-ifd) > 0.02) then
-                      exit
-                   end if
-                   difi(II) = isign*ifd
-                end do
-
-                if (abs(D-ifd) <= 0.02) then
-                   np(I, I1, I8) = np(I, I1, I8) + 1
-                   K = np(I, I1, I8)
-                   npl(I, I1, I8, K) = I2
-                   nvec(I, I1, I8, K, 1:3) = difi(1:3)
-                   if (steer(18) .ne. 0) then
-                      write(*,*) "np=(", I, I1, I8, "=", K, " npl=", I2, "nvec=", difi(1:3)
-                   end if
-                   exit
-                end if
-                I8 = I8 + 1
-             end do
-             if (I8 > J) then
-                write(*,*) "Wrong space group", I, I1, I2, I4
-                exit
+             np(I, I1, match_atom) = np(I, I1, match_atom) + 1
+             K = np(I, I1, match_atom)
+             npl(I, I1, match_atom, K) = I2
+             nvec(I, I1, match_atom, K, 1:3) = mapped_shift(1:3)
+             if (steer(18) .ne. 0) then
+                write(*,*) "np=(", I, I1, match_atom, "=", K, " npl=", I2, "nvec=", mapped_shift(1:3)
              end if
           end do
-          if (I8 > J) then
-             exit
-          end if
        end do
-       if (I8 > J) then
-          exit
-       end if
     end do
 
   end subroutine sym_sumsets
+
+  subroutine find_unique_atom_mapping(trac, atom_positions, nat_this, ai, tol, match_atom, mapped_shift, match_count)
+    real(dp), intent(in) :: trac(3)
+    real(dp), intent(in) :: atom_positions(3, nat_this)
+    integer, intent(in) :: nat_this
+    real(dp), intent(in) :: ai(3,3)
+    real(dp), intent(in) :: tol
+    integer, intent(out) :: match_atom
+    real(dp), intent(out) :: mapped_shift(3)
+    integer, intent(out) :: match_count
+
+    integer :: atom_index, component
+    real(dp) :: dif(3)
+    real(dp) :: candidate_shift(3)
+    logical :: is_match
+
+    match_atom = 0
+    match_count = 0
+    mapped_shift(:) = 0
+
+    do atom_index = 1, nat_this
+       dif(:) = trac(:) - atom_positions(:, atom_index)
+       candidate_shift(:) = 0
+       is_match = .true.
+
+       do component = 1, 3
+          candidate_shift(component) = ai(1, component)*dif(1) + &
+               & ai(2, component)*dif(2) + ai(3, component)*dif(3)
+          if (abs(candidate_shift(component) - nint(candidate_shift(component))) > tol) then
+             is_match = .false.
+             exit
+          end if
+       end do
+
+       if (is_match) then
+          match_count = match_count + 1
+          if (match_count == 1) then
+             match_atom = atom_index
+             mapped_shift(:) = nint(candidate_shift(:))
+          else
+             write(*,*) "Ambiguous atom mapping detected"
+             write(*,*) " target position: ", trac(:)
+             write(*,*) " atom index candidates: ", match_atom, atom_index
+             error stop "Ambiguous atom mapping"
+          end if
+       end if
+    end do
+
+    if (match_count == 0) then
+       write(*,*) "No atom mapping found"
+       write(*,*) " target position: ", trac(:)
+       error stop "Missing atom mapping"
+    end if
+  end subroutine find_unique_atom_mapping
 end module sumsets

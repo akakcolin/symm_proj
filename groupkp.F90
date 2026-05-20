@@ -153,6 +153,8 @@ contains
        write(*,*) "K-point symmetry analysis completed"
     end if
 
+    call validate_little_group(mtab2, kgord, tol_group_closure)
+
     ! section 3
     ! tests for the nonsymmorphic space group
     if (.not. (steer(20) .ne. 0)) then
@@ -218,6 +220,67 @@ contains
     deallocate(tmp_kgel)
 
   end subroutine sym_groupkp
+
+  subroutine validate_little_group(mt, group_order, tol)
+    integer, intent(in) :: mt(:,:)
+    integer, intent(in) :: group_order
+    real(dp), intent(in) :: tol
+
+    integer :: i, j, k, left, right, inverse_index
+
+    if (group_order < 1) then
+       error stop "Invalid little-group order"
+    end if
+
+    do i = 1, group_order
+       if (mt(i, 1) < 1 .or. mt(i, 1) > group_order) then
+          error stop "Little-group multiplication table has invalid first-column entries"
+       end if
+       if (mt(1, i) < 1 .or. mt(1, i) > group_order) then
+          error stop "Little-group multiplication table has invalid first-row entries"
+       end if
+    end do
+
+    do i = 1, group_order
+       do j = 1, group_order
+          k = mt(i, j)
+          if (k < 1 .or. k > group_order) then
+             error stop "Little-group multiplication table is not closed"
+          end if
+       end do
+    end do
+
+    do i = 1, group_order
+       if (mt(1, i) /= i .or. mt(i, 1) /= i) then
+          error stop "Little-group multiplication table has inconsistent identity element"
+       end if
+    end do
+
+    do i = 1, group_order
+       inverse_index = 0
+       do j = 1, group_order
+          if (mt(i, j) == 1 .and. mt(j, i) == 1) then
+             inverse_index = j
+             exit
+          end if
+       end do
+       if (inverse_index == 0) then
+          error stop "Little-group multiplication table has no inverse element"
+       end if
+    end do
+
+    do i = 1, group_order
+       do j = 1, group_order
+          do k = 1, group_order
+             left = mt(mt(i, j), k)
+             right = mt(i, mt(j, k))
+             if (left /= right) then
+                error stop "Little-group multiplication table violates associativity"
+             end if
+          end do
+       end do
+    end do
+  end subroutine validate_little_group
   
   ! formation of the factor group Gk/Tk
   
@@ -371,4 +434,3 @@ contains
   end subroutine factorgroup
 
 end module groupkp
-

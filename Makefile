@@ -35,9 +35,9 @@ LIBS = -L/usr/local/lib -L/usr/lib -llapack -lblas
 # LIB_BLAS = -lptf77blas -lptcblas -latlas
 
 
-MODULES=   accuracy.o constants.o  message.o hall.o permu.o bztest.o groupkp.o sumsets.o projmat.o eigensolver.o intsec.o eigvec.o genera.o charac.o  subsp.o  classes.o  degen.o repres.o irrep.o  modsymprj.o vasp_reader.o orbmain.o
+MODULES=   accuracy.o constants.o  message.o hall.o permu.o bztest.o groupkp.o sumsets.o projmat.o eigensolver.o intsec.o eigvec.o genera.o charac.o  subsp.o  classes.o  degen.o repres.o irrep.o  modsymprj.o vasp_reader.o time_reversal.o time_reversal_optimization.o orbmain.o
 
-VASP_MODULES = accuracy.o constants.o message.o hall.o permu.o bztest.o groupkp.o sumsets.o projmat.o eigensolver.o intsec.o eigvec.o genera.o charac.o subsp.o classes.o degen.o repres.o irrep.o modsymprj.o vasp_reader.o sympw_vasp.o
+VASP_MODULES = accuracy.o constants.o message.o hall.o permu.o bztest.o groupkp.o sumsets.o projmat.o eigensolver.o intsec.o eigvec.o genera.o charac.o subsp.o classes.o degen.o repres.o irrep.o modsymprj.o vasp_reader.o time_reversal.o time_reversal_optimization.o sympw_vasp.o
 
 ALL=  $(MODULES)
 
@@ -56,10 +56,16 @@ $(MODULES):%.o:%.F90
 vasp_reader.o: vasp_reader.F90 accuracy.o constants.o genera.o
 	$(FC90) -c vasp_reader.F90
 
+time_reversal.o: time_reversal.F90 accuracy.o constants.o
+	$(FC90) -c time_reversal.F90
+
+time_reversal_optimization.o: time_reversal_optimization.F90 accuracy.o constants.o
+	$(FC90) -c time_reversal_optimization.F90
+
 sympw_vasp.o: sympw_vasp.F90 accuracy.o constants.o vasp_reader.o modsymprj.o
 	$(FC90) -c sympw_vasp.F90
 
-orbmain.o: orbmain.F90 vasp_reader.o
+orbmain.o: orbmain.F90 vasp_reader.o time_reversal.o time_reversal_optimization.o
 	$(FC90) -c orbmain.F90
 
 

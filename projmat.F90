@@ -12,7 +12,7 @@ contains
   ! section 8.1
 
   subroutine sym_projmat(laj, kgord, allow, jpdd, projmatrix, nvec, nat, lmax, np, nel, ncl, npl, &
-       & kgel, kkgel, listp, steer, ksym, ibz, K48, ldrmm, rk, u,tsmall, ttsmall)
+       & kgel, kkgel, listp, steer, ksym, ibz, pgnr, ldrmm, rk, u,tsmall, ttsmall)
     integer, intent(in) :: kgord
     integer, intent(in) :: allow(:)
     integer, intent(in) :: ncl
@@ -33,7 +33,7 @@ contains
     complex(dp), intent(in) :: ldrmm(:,:)
     integer, intent(in) :: ksym
     integer, intent(in) :: ibz
-    integer, intent(in) :: K48
+    integer, intent(in) :: pgnr
     real(dp), intent(in) :: rk(:)
     real(dp), intent(in) :: tsmall, ttsmall
     real(dp), intent(in) :: u(:,:)
@@ -49,7 +49,7 @@ contains
     integer :: ndi, III
     
     integer :: M1, N1, NN1, M2, N2, NN2, N3
-    integer :: nb, ichem, L, N, mu1, mu2
+    integer :: nb, ichem, L, N, mu1, mu2, atom_idx
     integer :: ncoset, K3
     integer :: I, I1,  ito, itotal
     real(dp) :: R1
@@ -69,52 +69,19 @@ contains
     complex(dp), allocatable :: jdprod(:,:)
     complex(dp), allocatable :: tmatri(:,:)
     complex(dp), dimension(72) :: ldmm
-    complex(dp), allocatable :: hugematrix(:,:,:,:,:,:)
-    integer, allocatable :: col_index(:,:,:), row_index(:,:,:)
     integer, allocatable :: step_size(:)
     integer :: temp_row, temp_col
+    integer :: lorb, offset_l, nrow_block
     integer :: alloc_stat
-    integer(8) :: matrix_size
 
-
-    !integer :: ncols, nrows
-    ! 1 3 5
-    ! Check memory requirements before allocation
-    matrix_size = int(maxval(nat), 8) * 7_8 * int(maxval(nat), 8) * 7_8 * 4_8 * &
-                  int(nel, 8) * int(ncl, 8) * int(maxval(laj), 8)
-    if (matrix_size > 1000000000_8) then  ! > 1 billion elements (~16 GB)
-       write(*,*)
-       write(*,*) "=========================================="
-       write(*,*) "WARNING: Large Memory Allocation"
-       write(*,*) "=========================================="
-       write(*,'(A,I15,A)') " Matrix elements: ", matrix_size, " (complex)"
-       write(*,'(A,F10.2,A)') " Estimated memory: ", real(matrix_size * 16) / (1024**3), " GB"
-       write(*,*)
-    end if
-
-    allocate(hugematrix(maxval(nat)*7, maxval(nat)*7, 4, nel, ncl, maxval(laj)), &
-             stat=alloc_stat)
-    if (alloc_stat /= 0) then
-       write(*,*)
-       write(*,*) "=========================================="
-       write(*,*) "ERROR: Memory Allocation Failed"
-       write(*,*) "=========================================="
-       write(*,'(A,6I6)') " Required dimensions: ", maxval(nat)*7, maxval(nat)*7, 4, nel, ncl, maxval(laj)
-       write(*,'(A,F10.2,A)') " Estimated memory: ", real(matrix_size * 16) / (1024**2), " MB"
-       write(*,*)
-       error stop "Memory allocation failed"
-    end if
-
-    allocate(col_index(4,nel, ncl), stat=alloc_stat)
-    if (alloc_stat /= 0) error stop "Failed to allocate col_index"
-
-    allocate(row_index(4,nel, ncl), stat=alloc_stat)
-    if (alloc_stat /= 0) error stop "Failed to allocate row_index"
-
-    col_index=0
-    row_index=0
-
-    hugematrix(:,:,:,:,:,:) = 0
+    allocate(step_size(nel))
+    do ichem = 1, nel
+       step_size(ichem) = 0
+       do L = 0, lmax(ichem)
+          step_size(ichem) = step_size(ichem) + 2*L + 1
+       end do
+    end do
+    temp_col = 1
 
     J=0
     N31 = -1
@@ -208,7 +175,7 @@ contains
                                         tmp_R = u(KI, 1)*rk(1) + u(KI, 2)*rk(2) + u(KI,3)*rk(3)
                                         R5 = cmplx(0, tmp_R)
                                      end if
-                                     K = K + K48
+                                     K = rotation_table_index(K, pgnr)
                                      tmp_R = nrn(I,1)*rk(1) + nrn(I,2)*rk(2) + nrn(I,3)*rk(3)
                                      R4 = cmplx(0, -tmp_R) + R5
                                      ep = exp(R4)
@@ -402,16 +369,20 @@ contains
                    ! Thereafter all of them have been calculated for all values of J, JD, ichem, L
 
                    if (itotal .ne. 0) then
+                      call validate_projection_block(tmatri(1:ndi, 1:itotal), ndi, tol_projection, J, JD, ichem, L)
+
                       do I = 1, itotal
+                         do atom_idx = 1, nat(ichem)
+                            temp_row = projection_block_row_index(ichem, atom_idx, L, nat, step_size)
+                            projmatrix(temp_row:temp_row+nrow_block-1, temp_col) = &
+                                 & tmatri((atom_idx-1)*nrow_block+1:(atom_idx-1)*nrow_block+nrow_block, I)
+                         end do
                          do I1 = 1, ndi
                             tmatriorg(1, I1, I) = real(tmatri(I1, I))
                             tmatriorg(2, I1, I) = aimag(tmatri(I1, I))
-                            hugematrix(I1, I, L+1, ichem, j, JD) = tmatri(I1, I)
                          end do
+                         temp_col = temp_col + 1
                       end do
-
-                      col_index(L+1, ichem, j) = itotal
-                      row_index(L+1, ichem, j) = ndi
 
                       !write(*,*)"Subblock ", nb, " sub-T-matrix for ichem = ", ichem
                       !write(*,*) ", L = ", L, " , ", nat(ichem), " atoms per numit cell"
@@ -445,73 +416,124 @@ contains
        end if
     end do
 
-    !! use to output  projmatrix for dftb s p 
-    !do JD=1, maxval(laj)
-    !do J=1, ncl
-    !   do ichem = 1, nel
-    !      do L = 1, lmax(ichem)+1
-    !         do I = 1, col_index(L, ichem, j)
-    !            write(*,*) hugematrix(1:row_index(L,ichem, j), I, L, ichem, j,JD)
-    !         end do
-    !      end do
-    !   end do
-    !end do
-    !end do
-
-    allocate(step_size(nel))
-
-    do ichem = 1, nel
-       step_size(ichem) = 0
-       do L = 0, lmax(ichem)
-          step_size(ichem) = step_size(ichem) + 2*L + 1
-       end do
-    end do
-    temp_col = 1
-    do JD = 1, maxval(laj)
-    do J = 1, ncl
-       ndi = 0
-       do ichem = 1, nel
-          if (ichem >1) then
-             ndi = ndi + nat(ichem-1)*step_size(ichem-1)
-          end if
-          do L = 1, lmax(ichem) + 1
-             do I = 1, col_index(L, ichem, j)
-                if (L == 1) then 
-                   do n = 1, nat(ichem)
-                      !write(*,*) "n,  I, ichem  temp_col", ndi + (n-1)*step_size(ichem)+1, &
-                      !     & hugematrix(n, I, 1, ichem, j), temp_col
-                      temp_row = ndi + (n-1)*step_size(ichem)+1
-                      projmatrix(temp_row,temp_col) = &
-                           & hugematrix(n,I,L,ichem,J, JD)
-                   end do
-                else if (L == 2) then
-                   do n = 1, nat(ichem)
-                      !dowrite(*,*) "n,  I, ichem  temp_col", ndi + (n-1)*step_size(ichem)+2,&
-                      !     & ndi + (n-1)*step_size(ichem)+4, &
-                      !     & hugematrix((n-1)*3+1:(n-1)*3+3, I, 2, ichem, j), temp_col
-                      temp_row=ndi+(n-1)*step_size(ichem)
-                      projmatrix(temp_row+2:temp_row+4, temp_col ) = &
-                           & hugematrix((n-1)*3+1:(n-1)*3+3,I,L,ichem, j, JD)
-                   end do
-                else if (L == 3) then
-                   do n = 1, nat(ichem)
-                      temp_row = ndi+(n-1)*step_size(ichem)
-                      projmatrix(temp_row+5: temp_row+9, temp_col) = &
-                           & hugematrix((n-1)*5+1:(n-1)*5+5,I,L,ichem, j, JD)
-                   end do
-                end if
-                temp_col = temp_col + 1
-             end do
-          end do
-       end do
-    end do
-    end do
-
-    ! reorder projmat
-    deallocate(hugematrix)
-    deallocate(col_index)
-    deallocate(row_index)
     deallocate(step_size)
 
   end subroutine sym_projmat
+
+  integer function projection_block_row_index(ichem, atom_idx, L, nat, step_size) result(row_index)
+    integer, intent(in) :: ichem
+    integer, intent(in) :: atom_idx
+    integer, intent(in) :: L
+    integer, intent(in) :: nat(:)
+    integer, intent(in) :: step_size(:)
+
+    integer :: I1
+    integer :: base_row
+
+    base_row = 0
+    do I1 = 1, ichem - 1
+       base_row = base_row + nat(I1)*step_size(I1)
+    end do
+
+    row_index = base_row + (atom_idx - 1)*step_size(ichem) + 2*L + 1
+  end function projection_block_row_index
+
+  subroutine validate_projection_block(pblock, n, tol, J, JD, ichem, L)
+    complex(dp), intent(in) :: pblock(:,:)
+    integer, intent(in) :: n
+    real(dp), intent(in) :: tol
+    integer, intent(in) :: J
+    integer, intent(in) :: JD
+    integer, intent(in) :: ichem
+    integer, intent(in) :: L
+
+    complex(dp), allocatable :: p2(:,:), delta(:,:)
+    complex(dp), allocatable :: hermitian_delta(:,:), gram(:,:)
+    complex(dp) :: trace_value
+    integer :: row_idx, col_idx
+
+    if (size(pblock, 1) /= n .or. size(pblock, 2) /= n) then
+       write(*,*) "Projection block has inconsistent dimensions for J =", J, &
+            & ", JD =", JD, ", ichem =", ichem, ", L =", L
+       error stop "Projection block has inconsistent dimensions"
+    end if
+
+    allocate(p2(n, n))
+    allocate(delta(n, n))
+    allocate(hermitian_delta(n, n))
+    allocate(gram(n, n))
+
+    p2 = matmul(pblock, pblock)
+    delta = p2 - pblock
+    hermitian_delta = pblock - transpose(conjg(pblock))
+    gram = matmul(transpose(conjg(pblock)), pblock)
+
+    trace_value = cmplx(0.0_dp, 0.0_dp, kind=dp)
+    do row_idx = 1, n
+       trace_value = trace_value + pblock(row_idx, row_idx)
+    end do
+
+    do row_idx = 1, n
+       do col_idx = 1, n
+          if (abs(delta(row_idx, col_idx)) > tol) then
+             write(*,*) "Projection block idempotency failed for J =", J, &
+                  & ", JD =", JD, ", ichem =", ichem, ", L =", L
+             write(*,*) "Projection block idempotency failed at (", row_idx, ",", col_idx, ")"
+             write(*,*) "Residual =", delta(row_idx, col_idx)
+             error stop "Projection block is not idempotent"
+          end if
+       end do
+    end do
+
+    do row_idx = 1, n
+       do col_idx = 1, n
+          if (abs(hermitian_delta(row_idx, col_idx)) > tol) then
+             write(*,*) "Projection block Hermiticity failed for J =", J, &
+                  & ", JD =", JD, ", ichem =", ichem, ", L =", L
+             write(*,*) "Projection block Hermiticity failed at (", row_idx, ",", col_idx, ")"
+             write(*,*) "Residual =", hermitian_delta(row_idx, col_idx)
+             error stop "Projection block is not Hermitian"
+          end if
+       end do
+    end do
+
+    do row_idx = 1, n
+       do col_idx = 1, n
+          if (row_idx /= col_idx) then
+             if (abs(gram(row_idx, col_idx)) > tol_projection) then
+                write(*,*) "Projection block column orthogonality failed for J =", J, &
+                     & ", JD =", JD, ", ichem =", ichem, ", L =", L
+                write(*,*) "Projection block column orthogonality failed at (", row_idx, ",", col_idx, ")"
+                write(*,*) "Residual =", gram(row_idx, col_idx)
+                error stop "Projection block columns are not orthogonal"
+             end if
+          else
+             if (abs(gram(row_idx, col_idx) - 1.0_dp) > tol_projection) then
+                write(*,*) "Projection block column normalization failed for J =", J, &
+                     & ", JD =", JD, ", ichem =", ichem, ", L =", L
+                write(*,*) "Projection block column normalization failed at (", row_idx, ",", col_idx, ")"
+                write(*,*) "Residual =", gram(row_idx, col_idx)
+                error stop "Projection block columns are not normalized"
+             end if
+          end if
+       end do
+    end do
+
+    if (abs(aimag(trace_value)) > tol) then
+       write(*,*) "Projection block trace has non-negligible imaginary part for J =", J, &
+            & ", JD =", JD, ", ichem =", ichem, ", L =", L
+       error stop "Projection block trace has non-negligible imaginary part"
+    end if
+
+    if (abs(real(trace_value) - nint(real(trace_value))) > tol_projector_trace) then
+       write(*,*) "Projection block trace =", trace_value, "for J =", J, &
+            & ", JD =", JD, ", ichem =", ichem, ", L =", L
+       error stop "Projection block trace is not close to an integer"
+    end if
+
+    deallocate(p2)
+    deallocate(delta)
+    deallocate(hermitian_delta)
+    deallocate(gram)
+  end subroutine validate_projection_block
 end module projmat

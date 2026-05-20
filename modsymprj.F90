@@ -58,7 +58,6 @@ contains
     integer :: N, N2, NT, nb, ntr, nup, NN1, NN2, NC
     integer :: nblock, ndi, nip, nfacto
     integer :: nal, N3, N31, N1, ncl
-    integer :: K48
     integer :: number_of_wave_vectors
     integer :: ksym, ntz, ibz
     integer :: M1, ncoset
@@ -277,14 +276,12 @@ contains
        allocate(mtab2(24, 24))
        mtab(:,:) = 0
        mtab(:,:) = MD6h(:,:)
-       K48 = 48
        !write(*,*) 'The pointgroup (no. ', pgnr, ') of the crystal is a subgroup of D6h, with element:' 
     else
        allocate(mtab(48, 48))
        allocate(mtab2(48, 48))
        mtab(:,:) = 0
        mtab(:,:) = MOh(:,:)
-       K48= 0
        !write(*,*) 'The pointgroup (no. ', pgnr, ') of the crystal is a subgroup of Oh, with element numbers:'     
     end if
 
@@ -324,7 +321,7 @@ contains
     mtab2(:,:)=0
 
     do I = 1, order
-       rgr(1:3, 1:3, I) = rgr3(1:3, 1:3, gel(I) + K48)
+       rgr(1:3, 1:3, I) = rgr3(1:3, 1:3, rotation_table_index(gel(I), pgnr))
     end do
     ! section 1.20
 
@@ -641,7 +638,7 @@ contains
           !end subroutine sym_sumsets
 
           call sym_projmat(laj, kgord, allow, jpdd, projmatrix(:,:, ikp), nvec, nat, lmax, np, nel, ncl, npl, &
-               & kgel, kkgel, listp, steer, ksym, ibz, K48, ldrmm, rk, u, tsmall, ttsmall)
+               & kgel, kkgel, listp, steer, ksym, ibz, pgnr, ldrmm, rk, u, tsmall, ttsmall)
 
           num_block(ikp)=nup
 

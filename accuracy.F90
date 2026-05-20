@@ -98,5 +98,38 @@ module accuracy
   real(dp), parameter :: tol_orthog = 1.0e-6_dp     !* Tolerance for orthogonality
   real(dp), parameter :: tol_phase = 1.0e-6_dp      !* Tolerance for phase factor comparison
   real(dp), parameter :: tol_projection = 1.0e-8_dp !* Tolerance for projection matrix validation
+  real(dp), parameter :: tol_lattice_integer = 1.0e-6_dp
+  real(dp), parameter :: tol_group_closure = 1.0e-8_dp
+  real(dp), parameter :: tol_irrep_phase = 1.0e-6_dp
+  real(dp), parameter :: tol_projector_trace = 1.0e-6_dp
+
+  integer, parameter :: pg_parent_oh = 0
+  integer, parameter :: pg_parent_d6h = 48
+
+contains
+
+  integer function point_group_table_offset(point_group_number) result(offset)
+    integer, intent(in) :: point_group_number
+
+    if ((point_group_number >= 16) .and. (point_group_number <= 31)) then
+       offset = pg_parent_d6h
+    else
+       offset = pg_parent_oh
+    end if
+  end function point_group_table_offset
+
+  integer function rotation_table_index(point_operator_id, point_group_number) result(table_index)
+    integer, intent(in) :: point_operator_id
+    integer, intent(in) :: point_group_number
+
+    table_index = point_operator_id + point_group_table_offset(point_group_number)
+    if ((table_index < 1) .or. (table_index > 72)) then
+       write(*,*) "ERROR: Invalid rotation-table index"
+       write(*,*) " point_operator_id =", point_operator_id
+       write(*,*) " point_group_number =", point_group_number
+       write(*,*) " table_index =", table_index
+       error stop "Invalid rotation-table index"
+    end if
+  end function rotation_table_index
 
 end module accuracy

@@ -7,6 +7,8 @@ program main
   use projmat
   use genera
   use vasp_reader
+  use time_reversal
+  use time_reversal_optimization
   implicit none
 
   integer :: I, J, K, K1, K2, IV
@@ -32,7 +34,6 @@ program main
 
   real(dp), allocatable :: rgr(:,:,:)
   
-  integer :: K48
   integer :: number_of_wave_vectors
   integer :: last 
   integer :: wvco
@@ -77,6 +78,14 @@ program main
   
   integer, allocatable :: lmax(:)
   integer, allocatable :: nat(:)
+
+  ! Time-reversal symmetry variables
+  integer, allocatable :: trim_indices(:), tr_pairs(:)
+  integer :: n_trim, ik_tr
+  logical :: is_trim
+  logical, allocatable :: should_compute(:)
+  integer, allocatable :: source_kpoint(:)
+  integer :: n_computed, n_skipped
   integer :: nel, pgnr
   real(dp) :: tsmall, ttsmall
   real(dp), dimension(3) :: tsk
@@ -218,8 +227,8 @@ program main
      deallocate(nat_vasp, positions_vasp, elements, kpoints_vasp, kpoint_names)
 
      atco = 0  ! Fractional coordinates
-     tsmall = 0.00001
-     ttsmall = 0.000001
+     tsmall = tol_equal
+     ttsmall = tol_projection
      steer(:) = 0  ! Initialize steer array
      steer(2) = 1  ! Enable sirt initialization in sym_charac
 
@@ -254,7 +263,7 @@ program main
      open(fh, file=infile, status='OLD', action='read')
   end if
   
-  debug=1
+  debug=0
   nopi1 = 1;
   ksym = 1;
   ntz = 0;
@@ -563,8 +572,8 @@ program main
   ! (for space groups 189, 190), 31 = D6h, 32 = T, 33 = Th, 34 = O,
   ! 35 = Td, 36 = Oh
 
-  tsmall = 0.00001
-  ttsmall = 0.000001
+  tsmall = tol_equal
+  ttsmall = tol_projection
   !section 1.8
   do I = 1, nel
      read(fh,*) nat(I)
@@ -658,7 +667,6 @@ program main
      allocate(mtab(24, 24))
      mtab(:,:) = 0
      mtab(:,:) = MD6h(:,:)
-     K48 = 48
      write(*,*)
      write(*,*) "This point group is a subgroup of D6h (hexagonal symmetry)"
      write(*,*) "Using D6h multiplication table as reference"
@@ -666,7 +674,6 @@ program main
      allocate(mtab(48, 48))
      mtab(:,:) = 0
      mtab(:,:) = MOh(:,:)
-     K48= 0
      write(*,*)
      write(*,*) "This point group is a subgroup of Oh (cubic symmetry)"
      write(*,*) "Using Oh multiplication table as reference"
@@ -726,7 +733,7 @@ program main
   mtab2(:,:)=0
 
   do I = 1, order
-     rgr(1:3, 1:3, I) = rgr3(1:3, 1:3, gel(I) + K48)
+     rgr(1:3, 1:3, I) = rgr3(1:3, 1:3, rotation_table_index(gel(I), pgnr))
   end do
 
   !allocate(factor(nfacto))
@@ -761,6 +768,57 @@ program main
   write(*,'(A,I3,A)') " Processing ", number_of_wave_vectors, " k-point(s)..."
   write(*,*)
 
+  ! Analyze time-reversal symmetry
+  call find_trim_points(all_kpoints, number_of_wave_vectors, &
+                        trim_indices, n_trim, tsmall)
+
+  allocate(tr_pairs(number_of_wave_vectors))
+  call build_time_reversal_pairs(all_kpoints, number_of_wave_vectors, &
+                                  tr_pairs, tsmall)
+
+  write(*,*)
+  write(*,*) "=========================================="
+  write(*,*) "Time-Reversal Symmetry Analysis"
+  write(*,*) "=========================================="
+  write(*,'(A)') " For non-magnetic systems: Θ ψ(r) = ψ*(r)"
+  write(*,'(A)') " Energy bands satisfy: E(k) = E(-k)"
+  write(*,*)
+  write(*,'(A,I3,A,I3)') " Found ", n_trim, " time-reversal invariant k-points (TRIM) out of ", &
+                         number_of_wave_vectors
+  if (n_trim > 0) then
+     write(*,*) "TRIM point indices (wave functions can be chosen real):"
+     do ik_tr = 1, n_trim, 12
+        write(*,'(12I6)') trim_indices(ik_tr:min(ik_tr+11, n_trim))
+     end do
+  end if
+
+  write(*,*)
+  write(*,*) "Time-reversal k-point pairing:"
+  do ik_tr = 1, number_of_wave_vectors
+     if (tr_pairs(ik_tr) == ik_tr) then
+        write(*,'(A,I3,A,3F10.5,A)') "  k", ik_tr, " (", &
+             all_kpoints(ik_tr,:), ") is a TRIM point"
+     else if (tr_pairs(ik_tr) > ik_tr) then
+        write(*,'(A,I3,A,I3,A)') "  k", ik_tr, " <--> k", tr_pairs(ik_tr), &
+             " (time-reversal partners)"
+     else if (tr_pairs(ik_tr) == -1) then
+        write(*,'(A,I3,A)') "  k", ik_tr, " has no time-reversal partner in list"
+     end if
+  end do
+  write(*,*)
+
+  ! Analyze time-reversal optimization potential
+  allocate(should_compute(number_of_wave_vectors))
+  allocate(source_kpoint(number_of_wave_vectors))
+
+  call mark_kpoints_to_compute(tr_pairs, number_of_wave_vectors, &
+                                should_compute, source_kpoint, &
+                                n_computed, n_skipped, n_trim)
+
+  call print_tr_optimization_summary(number_of_wave_vectors, n_computed, &
+                                      n_skipped, n_trim, should_compute, &
+                                      source_kpoint, tr_pairs)
+
   do ikp = 1, number_of_wave_vectors
      rk(1:3) = all_kpoints(ikp,:)
      ark(1:3) = rk(1:3)
@@ -772,6 +830,15 @@ program main
      write(*,*) "------------------------------------------"
      write(*,'(A,I3,A,3F10.5)') " K-point ", ikp, ": ", all_kpoints(ikp,:)
      write(*,*) "------------------------------------------"
+
+     ! Check if this k-point is time-reversal invariant
+     is_trim = is_time_reversal_invariant_point(all_kpoints(ikp,:), tsmall)
+     if (is_trim) then
+        write(*,*)
+        write(*,*) "*** This is a time-reversal invariant point (TRIM) ***"
+        write(*,*) "*** Wave functions can be chosen to be real ***"
+        write(*,*)
+     end if
 
      allocate(nopli1(100))
      nopli1(:) = 1;
@@ -935,7 +1002,7 @@ program main
 
        write(*,*) "Building projection matrices..."
        call sym_projmat(laj, kgord, allow, jpdd, projmatrix(ikp,:,:), nvec, nat, lmax, np, nel, ncl, npl, &
-            & kgel, kkgel, listp, steer, ksym, ibz, K48, ldrmm, rk, u,tsmall, ttsmall)
+            & kgel, kkgel, listp, steer, ksym, ibz, pgnr, ldrmm, rk, u,tsmall, ttsmall)
 
        write(*,*)
        write(*,*) "=========================================="
@@ -1014,6 +1081,12 @@ program main
   deallocate(rgr)
   deallocate(til)
   deallocate(projmatrix)
+
+  ! Deallocate time-reversal arrays
+  deallocate(trim_indices)
+  deallocate(tr_pairs)
+  deallocate(should_compute)
+  deallocate(source_kpoint)
   
         ! section 7
         
