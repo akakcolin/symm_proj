@@ -267,7 +267,7 @@ contains
                 end do
                 if (IV >= LJ1) then
                    fi(1:G, 1:LJ1) = transpose(dfi(1:LJ1, 1:G))
-                   stop
+                   exit
                 end if
              end if
           end if

@@ -72,15 +72,36 @@ contains
     complex(dp), allocatable :: hugematrix(:,:,:,:,:,:)
     integer, allocatable :: col_index(:,:,:), row_index(:,:,:)
     integer, allocatable :: step_size(:)
-    integer :: temp_row, temp_col 
-    
-    
-    !integer :: ncols, nrows
-    ! 1 3 5 
-    allocate(hugematrix(maxval(nat)*7, maxval(nat)*7, 4, nel, ncl, maxval(laj)))
+    integer :: temp_row, temp_col
+    integer :: alloc_stat
+    integer(8) :: matrix_size
 
-    allocate(col_index(4,nel, ncl))
-    allocate(row_index(4,nel, ncl))
+
+    !integer :: ncols, nrows
+    ! 1 3 5
+    ! Check memory requirements before allocation
+    matrix_size = int(maxval(nat), 8) * 7_8 * int(maxval(nat), 8) * 7_8 * 4_8 * &
+                  int(nel, 8) * int(ncl, 8) * int(maxval(laj), 8)
+    if (matrix_size > 1000000000_8) then  ! > 1 billion elements (~16 GB)
+       write(*,*) "Warning: hugematrix requires large memory:", matrix_size, "complex elements"
+       write(*,*) "Estimated memory: ", matrix_size * 16 / (1024**3), "GB"
+    end if
+
+    allocate(hugematrix(maxval(nat)*7, maxval(nat)*7, 4, nel, ncl, maxval(laj)), &
+             stat=alloc_stat)
+    if (alloc_stat /= 0) then
+       write(*,*) "Error: Failed to allocate hugematrix"
+       write(*,*) "Required dimensions:", maxval(nat)*7, maxval(nat)*7, 4, nel, ncl, maxval(laj)
+       write(*,*) "Estimated memory:", matrix_size * 16 / (1024**2), "MB"
+       error stop "Memory allocation failed"
+    end if
+
+    allocate(col_index(4,nel, ncl), stat=alloc_stat)
+    if (alloc_stat /= 0) error stop "Failed to allocate col_index"
+
+    allocate(row_index(4,nel, ncl), stat=alloc_stat)
+    if (alloc_stat /= 0) error stop "Failed to allocate row_index"
+
     col_index=0
     row_index=0
 
@@ -199,8 +220,9 @@ contains
                    rh = real(laj(J))/ real(kgord)
                    jdpk(1:ndi, 1:ndi) = jdpk(1:ndi, 1:ndi) * rh
                    ! section 8.4
-                   ! test projection matrix
+                   ! test projection matrix: must satisfy P^2 = P (idempotent) and P = P^dagger (Hermitian)
 
+                   ! Test 1: Check idempotency P^2 = P
                    jdprod(1:ndi, 1:ndi) = matmul(jdpk(:,:) , jdpk(:, :))
                    tmatri(1:ndi, 1:ndi) = jdprod(1:ndi, 1:ndi) - jdpk(1:ndi, 1:ndi)
 
@@ -219,9 +241,9 @@ contains
                       end if
                       K4 = K4 + 1
                    end do
-                   ! error, no projection matrix for J
+                   ! error, no projection matrix for J (failed idempotency test)
                    if (K4 <= ndi) then
-                      write(*,*) "Error, no projection matrix for J = ", J
+                      write(*,*) "Error: P^2 != P, not a projection matrix for J = ", J
                       write(*,*) ", JD= ", JD, ", laj= ", laj(J), ", ichem = ", ichem, "L = ", L, " ndi= ", ndi
 
                       jdpkorg(1, 1:ndi, 1:ndi) = real(jdpk(1:ndi,1:ndi))
@@ -229,6 +251,8 @@ contains
                       tmatriorg(1, 1:ndi, 1:ndi) = real(tmatri(1:ndi, 1:ndi))
                       tmatriorg(2, 1:ndi, 1:ndi) = aimag(tmatri(1:ndi, 1:ndi))
                    end if
+
+                   ! Test 2: Check Hermiticity P = P^dagger
                    tmatri(1:ndi, 1:ndi) = jdpk(1:ndi, 1:ndi)  - transpose((conjg(jdpk(1:ndi, 1:ndi))))
                    K4 = 1
                    do while (K4 <= ndi)
@@ -245,7 +269,7 @@ contains
                       K4 = K4 + 1
                    end do
                    if (K4 <= ndi) then
-                      write(*,*) "jdpk - hermite conjugate(jdpk)"
+                      write(*,*) "Error: P != P^dagger, projection matrix not Hermitian"
                       write(*,*) "Error, no projection matrix for J =", J, "JD =", JD, "laj = ", laj(J)
                       write(*,*) ""
                       tmatriorg(1, 1:ndi, 1:ndi) = real(tmatri(1:ndi, 1:ndi))
@@ -309,37 +333,32 @@ contains
                                   tmatri(1:ndi, itotal) = jdpk(1:ndi, I)*sumtot
                                   if (itotal .ne. I1) then
                                      NC = I1
+                                     ! Modified Gram-Schmidt orthogonalization (more numerically stable)
                                      do while (NC <= ito)
-                                        ! orthonormalisation against previously found orthonormal columns, which have non one element equal to 1
-                                        R4 = dot_product(tmatri(1:ndi, NC), tmatri(1:ndi, itotal))
-                                        if (abs(abs(R4)*abs(R4) -1 ) > 0.01) then
+                                        ! orthonormalisation against previously found orthonormal columns
+                                        R4 = dot_product(conjg(tmatri(1:ndi, NC)), tmatri(1:ndi, itotal))
+                                        if (abs(R4) > 1.0e-10_dp) then
+                                           ! Project out component along NC-th vector
                                            tmatri(1:ndi, itotal) = tmatri(1:ndi, itotal) - R4*tmatri(1:ndi, NC)
-                                           R1 = 0
-                                           LD1 = 1
-                                           do while (LD1 <= ndi)
-                                              if (abs(tmatri(LD1, itotal)) >= 0.01) then
-                                                 ! if all elements of the column become very samll after an orthonormalisation, we do
-                                                 ! not use the column, Renormalisation would give large errors
-                                                 exit
-                                              end if
-                                              LD1 = LD1 + 1
-                                           end do
-                                           if (LD1 <= ndi) then
-                                              R1= sum(abs(tmatri(1:ndi, itotal))**2)
-                                              R1 = 1/sqrt(R1)
-                                              ! renormalisation
-                                              tmatri(1:ndi, itotal) = tmatri(1:ndi, itotal) *R1
-                                           else
+                                           ! Check if vector became too small (numerically dependent)
+                                           R1 = sum(abs(tmatri(1:ndi, itotal))**2)
+                                           if (R1 < ttsmall) then
+                                              ! Vector is linearly dependent, discard it
                                               itotal = itotal - 1
                                               exit
                                            end if
-                                        else
-                                           itotal = itotal -1
-                                           exit
                                         end if
                                         NC = NC + 1
                                      end do
+                                     ! Renormalize after all projections (Modified Gram-Schmidt)
                                      if (NC > ito) then
+                                        R1 = sum(abs(tmatri(1:ndi, itotal))**2)
+                                        if (R1 >= ttsmall) then
+                                           R1 = 1/sqrt(R1)
+                                           tmatri(1:ndi, itotal) = tmatri(1:ndi, itotal) * R1
+                                        else
+                                           itotal = itotal - 1
+                                        end if
                                         if (itotal .eq. ntr) then
                                            exit
                                         end if

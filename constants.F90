@@ -21,7 +21,7 @@ module constants
   real(dp), parameter :: Coulomb__au = 1.0_dp / au__Coulomb
   real(dp), parameter :: Hartree__J = 4.3597441775e-18_dp ! Hartree -> Joule
   real(dp), parameter :: J__Hartree = 1.0_dp / Hartree__J
-  real(dp), parameter :: hbar = 1.054571726e10-34_dp ! hbar in SI units
+  real(dp), parameter :: hbar = 1.054571726e-34_dp ! hbar in SI units (J·s)
   real(dp), parameter :: gfac = 2.00231930436153_dp ! electron g factor
   real(dp), parameter :: mu_B = alpha_fs/2.0_dp ! Bohr magneton atomic CGS units
   

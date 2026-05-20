@@ -156,7 +156,14 @@ contains
              cind(N) = I
           end do
        end do
-       write(*,*) "The class index for each group element is M, cind", M, cind
+       write(*,*)
+       write(*,*) "=========================================="
+       write(*,*) "Class Structure"
+       write(*,*) "=========================================="
+       write(*,*) "Class index for each group element:"
+       do I = 1, M, 12
+          write(*,'(12I6)') cind(I:min(I+11, M))
+       end do
        do I = 1, ncl
           onert(I) = 0
           K = nfirst(I)
@@ -180,12 +187,28 @@ contains
           end if
        end do
 
-       write(*,*) "The order of each class is "
-       write(*,*) norder
-       write(*,*) "The power of each class is "
-       write(*,*) npow
-       write(*,*) "The conjugated class of each class is "
-       write(*,*) nconj
+       write(*,*)
+       write(*,*) "Order of each class:"
+       do I = 1, ncl, 12
+          write(*,'(12I6)') norder(I:min(I+11, ncl))
+       end do
+
+       write(*,*)
+       write(*,*) "Power table (class I raised to power J):"
+       do I = 1, ncl
+          write(*,'(A,I3,A,12I6)') "  Class", I, ":", npow(I, 1:min(12, ncl))
+          if (ncl > 12) then
+             do J = 13, ncl, 12
+                write(*,'(9X,12I6)') npow(I, J:min(J+11, ncl))
+             end do
+          end if
+       end do
+
+       write(*,*)
+       write(*,*) "Conjugate class of each class:"
+       do I = 1, ncl, 12
+          write(*,'(12I6)') nconj(I:min(I+11, ncl))
+       end do
 
        ! Find the exponent ex, the least common multiple of norder(I) , I = 1:ncl
 
@@ -234,8 +257,9 @@ contains
           end if
        end do
        if ( root > M) then
-          write(*,*) "No primitive root"
-          stop
+          write(*,*) "Error: No primitive root found for P =", P
+          write(*,*) "This should not happen for prime P. Check prime list."
+          error stop "Failed to find primitive root"
        end if
        Zprim = root
        J =Zprim
@@ -411,9 +435,10 @@ contains
                    exit
                 end if
                 if (nh .gt. P) then
-                   write(*,*) "Not enough eigencolumns"
-                    write(*,*) "nh P", nh, P
-                   stop
+                   write(*,*) "Error: Not enough eigencolumns found"
+                   write(*,*) "nh =", nh, "P =", P
+                   write(*,*) "This indicates a problem with the class constant matrix"
+                   error stop "Eigenspace decomposition failed"
                 end if
              end do
              w(S:T, 1:ncl) = z(S:T, 1:ncl)
@@ -424,8 +449,9 @@ contains
              end if
           end do
           if (nar(S) .eq. 0) then
-             write(*,*) "Error, nar(s) == 0"
-             stop
+             write(*,*) "Error: nar(S) == 0, S =", S
+             write(*,*) "This indicates a problem in eigenspace construction"
+             error stop "Invalid eigenspace structure"
           end if
           Y = LC
           do I = 1, ncl
@@ -451,8 +477,9 @@ contains
                 w(I, K) = modulus(w(I, K)*L, P)
              end do
           else
-             write(*,*) "Error, w(I,1) == 0"
-             stop
+             write(*,*) "Error: w(I,1) == 0 for I =", I
+             write(*,*) "Cannot normalize eigenvector"
+             error stop "Invalid eigenvector"
           end if
        end do
        do I = 1, ncl
@@ -466,7 +493,9 @@ contains
           norm2 = 0.0
           do I = 1, ncl
              J = nconj(I)
-             X = modulus(w(K,I)*w(K,J), P)
+             ! Use 64-bit arithmetic to prevent integer overflow
+             ! For large P (e.g., P > 46340), w(K,I)*w(K,J) can overflow 32-bit integers
+             X = int(mod(int(w(K,I), 8) * int(w(K,J), 8), int(P, 8)))
              X = modulus(X*hinv(I), P)
              norm2 = modulus(norm2 + X, P)
           end do
@@ -475,7 +504,9 @@ contains
           ! deg2 is the square of the dimenstion of the irreducible representation
           lj(K) = sqr(deg2)
           do N = 1, ncl
-             u(K, N) = modulus(lj(K)*w(K, N)*hinv(N), P)
+             ! Prevent overflow in triple product
+             X = int(mod(int(lj(K), 8) * int(w(K, N), 8) * int(hinv(N), 8), int(P, 8)))
+             u(K, N) = modulus(X, P)
           end do
           ! u(K, I) contains the irreducible character modulus P
           do I1 = 1, ncl
@@ -569,9 +600,11 @@ contains
        L = sum(lj(1:ncl)**2)
 
        if(L .ne. G) then
-          write(*,*) "Error L != G"
-          write(*,*) "L = ", L, " G= ", G, "lj = ", lj
-          stop
+          write(*,*) "Error: Sum of squared dimensions != group order"
+          write(*,*) "Sum(d_j^2) =", L, "but |G| =", G
+          write(*,*) "Dimensions:", lj(1:ncl)
+          write(*,*) "This indicates incorrect character calculation"
+          error stop "Character table validation failed"
        end if
        if(steer(7)>0) then
            write(*,*) "lj = ", lj

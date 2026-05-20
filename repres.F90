@@ -146,6 +146,13 @@ contains
           I = sirt(J, 1)
           IN = nfirst(I)
           IN = classl(IN)
+
+          if (IN < 1 .or. IN > G) then
+             write(*,*) "ERROR: Invalid IN value:", IN, "G=", G
+             write(*,*) "I=", I, "J=", J, "nfirst(I)=", nfirst(I)
+             stop "Invalid class index"
+          end if
+
           lab = pi2i*(sirt(J, 3) -1)/sirt(J, 2)
           lab = exp(lab)
           NO1 = norder(I) - 1
@@ -182,7 +189,7 @@ contains
                 end do
                 I2 = 1
                 do while( I2 <= G)
-                   if(abs(vec2(I2)) >= 0.001) then
+                   if(abs(vec2(I2)) >= tol_zero) then
                       exit
                    end if
                    I2 = I2 + 1
@@ -218,12 +225,12 @@ contains
                             !RIN = vec(1:G)*conj(fi(1:G, K11))
                             RINAB = abs(RIN)
 
-                            if (RINAB >= 0.001) then
-                               if (abs(RINAB -1) >= 0.001) then
+                            if (RINAB >= tol_zero) then
+                               if (abs(RINAB -1) >= tol_orthog) then
                                   vec(1:G) = vec(1:G) - RIN*fi(1:G, K11)
                                   rnorm = dot_product(vec(1:G), vec(1:G))
                                   !rnorm = sum(abs(vec(1:G))**2)
-                                  if (rnorm >=0.001) then
+                                  if (rnorm >= tol_zero) then
                                      rnorm = 1/sqrt(rnorm)
                                   else
                                      exit

@@ -1,17 +1,18 @@
 program main
   use accuracy
-  use constants 
+  use constants
   use groupkp
   use irrep
   use sumsets
   use projmat
   use genera
+  use vasp_reader
   implicit none
 
   integer :: I, J, K, K1, K2, IV
   integer :: K3, K4, K5, LD1, M2, mu1, mu2, KI, kg
   integer :: II, J1, JD, JJ, R5
-  integer :: index1, ikp, nfacto
+  integer :: idx1, ikp, nfacto
   integer :: ilmax, indk1, isign, itotal
   integer :: nb, nblock, NC, ndi, nip, NN1, NN2
   integer :: NT, ntr, nup 
@@ -50,7 +51,7 @@ program main
   integer, allocatable :: mtab3(:,:)
   integer, allocatable :: ngen(:)
   integer :: G
-  integer :: index
+  integer :: idx
   integer :: L, L1, L2, N, N2
 
   real(dp), dimension(4, 48) :: Oh
@@ -124,24 +125,146 @@ program main
 
   character(len=32) :: infile, arg
   integer :: stat
+  logical :: use_vasp_format
+  character(len=256) :: poscar_file, kpoints_file, comment_line
+  real(dp) :: scale_factor
+  character(len=2), allocatable :: elements(:)
+  integer, allocatable :: nat_vasp(:)
+  real(dp), allocatable :: positions_vasp(:,:)
+  logical :: is_cartesian
+  integer :: nel_vasp, total_atoms_vasp, atom_idx
+  real(dp), allocatable :: kpoints_vasp(:,:)
+  character(len=20), allocatable :: kpoint_names(:)
+  integer :: nkpts_vasp
+  character(len=20) :: kpt_mode
+  character(len=10) :: pg_name
 
    integer, allocatable  :: cind_invp(:)
- 
+
   call get_command_argument(number=1, value=infile, status=stat)
+
+  ! Check if using VASP format (POSCAR file)
+  use_vasp_format = (index(infile, 'POSCAR') > 0 .or. index(infile, 'CONTCAR') > 0)
+
+  if (use_vasp_format) then
+     ! VASP format input
+     write(*,*) "=========================================="
+     write(*,*) "Using VASP format input"
+     write(*,*) "=========================================="
+
+     poscar_file = infile
+
+     ! Get KPOINTS file (second argument or default)
+     if (command_argument_count() >= 2) then
+        call get_command_argument(2, kpoints_file)
+     else
+        kpoints_file = "KPOINTS"
+     end if
+
+     ! Read POSCAR
+     call read_poscar(poscar_file, comment_line, scale_factor, a, elements, &
+                     nat_vasp, positions_vasp, is_cartesian, nel_vasp, total_atoms_vasp)
+
+     nel = nel_vasp
+     allocate(nat(nel))
+     allocate(lmax(nel))
+     nat = nat_vasp
+
+     ! Get lmax from command line or use default
+     if (command_argument_count() >= 2 + nel) then
+        do I = 1, nel
+           call get_command_argument(2 + I, arg)
+           read(arg, *) lmax(I)
+        end do
+     else
+        lmax(:) = 2  ! Default: s, p, d
+        write(*,*) "Using default lmax = 2 for all elements"
+     end if
+
+     ! Read KPOINTS
+     call read_kpoints(kpoints_file, kpoints_vasp, kpoint_names, nkpts_vasp, kpt_mode)
+     number_of_wave_vectors = nkpts_vasp
+     allocate(all_kpoints(number_of_wave_vectors, 3))
+     all_kpoints = kpoints_vasp
+
+     ! Detect point group
+     pg_name = detect_point_group(a)
+     pgnr = point_group_name_to_number(pg_name)
+     write(*,*)
+     write(*,*) "Point Group Information:"
+     write(*,*) "  Name:   ", trim(pg_name)
+     write(*,*) "  Number: ", pgnr
+
+     ! Convert positions if cartesian
+     if (is_cartesian) then
+        write(*,*) "Converting Cartesian to fractional coordinates..."
+        bi = a
+        call sym_matinv(bi, 3)
+        do I = 1, total_atoms_vasp
+           positions_vasp(I,:) = matmul(positions_vasp(I,:), bi)
+        end do
+     end if
+
+     ! Reorganize positions by element
+     allocate(r(3, nel, maxval(nat)))
+     atom_idx = 1
+     do I = 1, nel
+        do J = 1, nat(I)
+           r(:, I, J) = positions_vasp(atom_idx, :)
+           atom_idx = atom_idx + 1
+        end do
+     end do
+
+     deallocate(nat_vasp, positions_vasp, elements, kpoints_vasp, kpoint_names)
+
+     atco = 0  ! Fractional coordinates
+     tsmall = 0.00001
+     ttsmall = 0.000001
+     steer(:) = 0  ! Initialize steer array
+     steer(2) = 1  ! Enable sirt initialization in sym_charac
+
+     ! Calculate reciprocal lattice vectors
+     write(*,*)
+     write(*,*) "=========================================="
+     write(*,*) "Crystal Structure"
+     write(*,*) "=========================================="
+     write(*,*) "Lattice vectors (Angstrom):"
+     do I = 1, 3
+        write(*,'(3F12.6)') a(I,:)
+     end do
+
+     write(*,*)
+     write(*,*) "Reciprocal lattice vectors (1/Angstrom):"
+     T = 2*pi
+     b(:,:) = a(:,:)
+     call sym_matinv(b, 3)
+     bi = transpose(a)
+     ai = transpose(b)
+
+     do I = 1, 3
+        write(*,'(3F12.6)') b(I, :)
+     end do
+
+     write(*,*)
+     write(*,*) 'Chemical elements:', nel
+     write(*,*) "Maximum L quantum number:", lmax(1)
+
+  else
+     ! Original format input
+     open(fh, file=infile, status='OLD', action='read')
+  end if
   
-  open(fh, file=infile, status='OLD', action='read')
-  
-  debug=0
+  debug=1
   nopi1 = 1;
   ksym = 1;
   ntz = 0;
 
   do I = 1, 24
-     index= (I-1)*3
+     idx= (I-1)*3
      Oh(4, I) = 0
-     Oh(1,I) = Ohdat(index + 1)*pi
-     Oh(2,I) = Ohdat(index + 2)*pi
-     Oh(3,I) = Ohdat(index + 3)*pi
+     Oh(1,I) = Ohdat(idx + 1)*pi
+     Oh(2,I) = Ohdat(idx + 2)*pi
+     Oh(3,I) = Ohdat(idx + 3)*pi
      Oh(1,I+24) = Oh(1,I)
      Oh(2,I+24) = Oh(2,I)
      Oh(3,I+24) = Oh(3,I)
@@ -150,11 +273,11 @@ program main
 
 
   do I = 1, 12
-     index= (I-1)*3
+     idx= (I-1)*3
      D6h(4, I) = 0
-     D6h(1,I) = D6hdat(index + 1)*pi/3
-     D6h(2,I) = D6hdat(index + 2)*pi/3
-     D6h(3,I) = D6hdat(index + 3)*pi/3
+     D6h(1,I) = D6hdat(idx + 1)*pi/3
+     D6h(2,I) = D6hdat(idx + 2)*pi/3
+     D6h(3,I) = D6hdat(idx + 3)*pi/3
      D6h(1,I+12) = D6h(1,I)
      D6h(2,I+12) = D6h(2,I)
      D6h(3,I+12) = D6h(3,I)
@@ -163,33 +286,39 @@ program main
 
 
   if(debug .eq. 1) then
-     write(*,*) "Rotation angles for group Oh"
-
+     write(*,*)
+     write(*,*) "=========================================="
+     write(*,*) "Rotation Angles for Group Oh"
+     write(*,*) "=========================================="
+     write(*,*) "Element    Phi            Theta          Psi"
      do I = 1, 48
-        write(*,*) I, Oh(1:3, I)
+        write(*,'(I5,3F15.10)') I, Oh(1:3, I)
      end do
 
-     write(*,*) "Rotation angles for group D6h"
-
+     write(*,*)
+     write(*,*) "=========================================="
+     write(*,*) "Rotation Angles for Group D6h"
+     write(*,*) "=========================================="
+     write(*,*) "Element    Phi            Theta          Psi"
      do I = 1, 24
-        write(*,*) I, D6h(1:3, I)
+        write(*,'(I5,3F15.10)') I, D6h(1:3, I)
      end do
   end if
 
 
   do I = 1,24
-     index = (I-1)*24
+     idx = (I-1)*24
      do J = 1, 24
-        MOh(I,J) = MOhdat(index + J)
+        MOh(I,J) = MOhdat(idx + J)
         MOh(I, J+24) = MOh(I,J) + 24
         MOh(I+24, J) = MOh(I, J+24)
         MOh(I+24, J+24) = MOh(I, J)
      end do
   end do
   do I = 1,12
-     index = (I-1)*12
+     idx = (I-1)*12
      do J = 1, 12
-        MD6h(I,J) = MD6hdat(index + J)
+        MD6h(I,J) = MD6hdat(idx + J)
         MD6h(I, J+12) = MD6h(I,J) + 12
         MD6h(I+12, J) = MD6h(I, J+12)
         MD6h(I+12, J+12) = MD6h(I, J)
@@ -198,16 +327,24 @@ program main
   end do
 
   if (debug .eq. 1) then
-     write(*,*) "The group Oh multiplication table:"
-
+     write(*,*)
+     write(*,*) "=========================================="
+     write(*,*) "Group Oh Multiplication Table"
+     write(*,*) "=========================================="
+     write(*,*) "Row x Column = Result"
+     write(*,*)
      do I = 1, 24
-        write(*,*) MOh(:, I)
+        write(*,'(48I3)') MOh(:, I)
      end do
 
-     write(*,*) "The group D6h multiplication table:"
-
+     write(*,*)
+     write(*,*) "=========================================="
+     write(*,*) "Group D6h Multiplication Table"
+     write(*,*) "=========================================="
+     write(*,*) "Row x Column = Result"
+     write(*,*)
      do I = 1, 12
-        write(*,*) MD6h(:, I)
+        write(*,'(24I3)') MD6h(:, I)
      end do
   end if
 
@@ -217,16 +354,23 @@ program main
   end do
 
   if (debug .eq. 1) then
-     write(*,*) "npgo"
-     write(*,*) npgo(1,:)
-     write(*,*) npgo(2,:)   
+     write(*,*)
+     write(*,*) "=========================================="
+     write(*,*) "Point Group Statistics"
+     write(*,*) "=========================================="
+     write(*,*) "Number of point groups by order:"
+     write(*,'(A,36I4)') "  Order:  ", npgo(1,:)
+     write(*,'(A,36I4)') "  Count:  ", npgo(2,:)
 
-     write(*,*) "The group elements of the 36 crystallographic point groups:"
+     write(*,*)
+     write(*,*) "=========================================="
+     write(*,*) "Group Elements of 36 Point Groups"
+     write(*,*) "=========================================="
      do I = 1, 36
         K = npgo(1,I)
         L = npgo(2,I)
         L2 = L + K -1
-        write(*,*)  nge(L:L2)
+        write(*,'(A,I3,A,I3,A,36I4)') "Group", I, " (order", K, "):", nge(L:L2)
      end do
   end if
 
@@ -320,23 +464,32 @@ program main
      rgr3(1:3, 1:3, I) = matmul(res(1:3, 1:3), Q(1:3,1:3))
   end do
   if (debug .eq. 1) then
-     write(*,*) "Rotation/inverseion matrices"
-
+     write(*,*)
+     write(*,*) "=========================================="
+     write(*,*) "Rotation/Inversion Matrices"
+     write(*,*) "=========================================="
      do I = 1, 72
-        write(*,*) I
+        write(*,'(A,I3)') "Matrix ", I
         do K1=1,3
-           write(*,*) rgr3(K1,:,I)
+           write(*,'(3F12.6)') real(rgr3(K1,:,I))
         end do
+        write(*,*)
      end do
 
-     write(*,*)"One hundred prime numbers are calculated:"
-     write(*,*) primen(:)
+     write(*,*)
+     write(*,*) "=========================================="
+     write(*,*) "Prime Numbers (first 100)"
+     write(*,*) "=========================================="
+     do I = 1, 100, 10
+        write(*,'(10I7)') primen(I:min(I+9, 100))
+     end do
   end if
 
-!!! 
-!!!  need to read struct data like vasp format 
+!!!
+!!!  need to read struct data like vasp format
 
- 
+  if (.not. use_vasp_format) then
+     ! Original format input - read from file
 
   read(fh, *) steer(:)
   !write(*,*) steer
@@ -415,6 +568,9 @@ program main
      end do
   end do
 
+  end if  ! End of original format input
+
+  ! Allocate arrays needed for both input formats
   allocate(np(nel, maxval(nat), maxval(nat)))
   allocate(nvec(nel, maxval(nat(:)), maxval(nat(:)), 100, 3))
   allocate(npl(nel, maxval(nat(:)), maxval(nat(:)), 100))
@@ -423,14 +579,13 @@ program main
   np(:,:,:)=0
   nvec(:,:,:,:,:)=0
   npl(:,:,:,:) = 0
-  ! section 1.10
 
   ! section 1.11
   order = npgo(1, pgnr)
   first = npgo(2, pgnr)
 
   allocate(gel(order))
-  
+
   gel(1:order) = nge(first:(first+order-1))
   !write(*,*)"gel", gel(1:order)
   npri(:) = primen(:)
@@ -440,43 +595,45 @@ program main
   allocate(u(order, 3))
   allocate(inver(maxval(gel(:))))
   inver(:)=0
-  
+
   u(:,:) = 0
 
-  if (steer(20) .eq. 0) then
-     ! section 1.13
-     ! the nonprimitive translations
-     
-     do I = 1, order
-        read(fh, *) uco
-        read(fh, *) u(I, :)
+  if (.not. use_vasp_format) then
+     if (steer(20) .eq. 0) then
+        ! section 1.13
+        ! the nonprimitive translations
 
-        ! uco = 1 means cartesian coordinates, uco = 0 means lattice coordinates
-        ! nonprimitive translation are calculated in lattice coordinates
-        
-        if (uco .ne. 1) then
-           tsk(1:3) = u(I, 1:3)
-           u(I, 1:3) = matmul(ai, tsk)
-        end if
-     end do
-     !u = transpose(u)
+        do I = 1, order
+           read(fh, *) uco
+           read(fh, *) u(I, :)
+
+           ! uco = 1 means cartesian coordinates, uco = 0 means lattice coordinates
+           ! nonprimitive translation are calculated in lattice coordinates
+
+           if (uco .ne. 1) then
+              tsk(1:3) = u(I, 1:3)
+              u(I, 1:3) = matmul(ai, tsk)
+           end if
+        end do
+        !u = transpose(u)
+     end if
   end if
 
-  
-  
   ! section 1.14
   if (( pgnr >=16) .and. (pgnr <=31)) then
      allocate(mtab(24, 24))
      mtab(:,:) = 0
      mtab(:,:) = MD6h(:,:)
      K48 = 48
-     write(*,*) 'The pointgroup (no. ', pgnr, ') of the crystal is a subgroup of D6h, with element:' 
+     write(*,*)
+     write(*,*) 'Point group (no.', pgnr, ') is a subgroup of D6h'
   else
-     allocate(mtab(48, 48))    
+     allocate(mtab(48, 48))
      mtab(:,:) = 0
      mtab(:,:) = MOh(:,:)
      K48= 0
-     write(*,*) 'The pointgroup (no. ', pgnr, ') of the crystal is a subgroup of Oh, with element numbers:'     
+     write(*,*)
+     write(*,*) 'Point group (no.', pgnr, ') is a subgroup of Oh'
   end if
 
   ! section 1.17
@@ -486,7 +643,7 @@ program main
      ! element of the group, so inver(28)=4.
      do I = 1, order
         inver(gel(I))  = I
-     end do 
+     end do
 
      do I = 1, order
         do J = 1, order
@@ -502,10 +659,18 @@ program main
      end do
   end if
 
-
   ! section 1.18
-  write(*,*) gel(1:order)
-  write(*,*) "The maximum value for the orbital quantum number L is set to:", lmax(:)
+  write(*,*)
+  write(*,*) "=========================================="
+  write(*,*) "Group Elements"
+  write(*,*) "=========================================="
+  write(*,*) "Element numbers in the point group:"
+  ! Print group elements in rows of 12
+  do I = 1, order, 12
+     write(*,'(12I6)') gel(I:min(I+11, order))
+  end do
+  write(*,*)
+  write(*,*) "Maximum orbital quantum number L:", lmax(:)
 
   ! section 1.19
   ! load the rotation matrices for the orthogonal coordinate system
@@ -517,42 +682,7 @@ program main
   do I = 1, order
      rgr(1:3, 1:3, I) = rgr3(1:3, 1:3, gel(I) + K48)
   end do
-  ! section 1.20
 
-  ! kpoints 
-  last = 0
-  read(fh, *) number_of_wave_vectors 
-
-  ! +1 just to temp mathod , to save 0,0,0
-  allocate(all_kpoints(number_of_wave_vectors+1,3)) ! all save to reciprocal lattice coordinate  
-
-  all_kpoints(:,:) = 0
-  write(*,*) "number_of_wave_vectors", number_of_wave_vectors
-
-  I = 1;
-  do while ( last .ne. 1)
-     ! last=1 for the last k-vector in the input, otherwise last=0.
-     ! wvco=1 means cartesian coordinates; wvco=0 means reciprocal
-     ! lattice coordinates. rk(1:3) is a k-vector, expressed in the
-     ! reciprocal unit vectors. nfacto is not zero, if want
-     ! to make calculations for other k-vectors with the same
-     ! direction, but different length. Then nfacto is the number
-     ! of such vectors to be treated after the first k-vector in that
-     ! direction.
-     !factor(:) = 0
-     read(fh,*) last
-     read(fh,*) wvco
-     read(fh,*) rk(:)
-     if (wvco .eq. 1) then
-        tsk(:) = rk(:)
-        rk(1:3) = matmul(bi(:,:), tsk(:))
-        ! wave vector in reciprocal lattice coordinates
-     end if
-     all_kpoints(I,1:3) = rk(1:3)
-     read(fh, *) nfacto
-     I = I + 1
-  end do
-  
   !allocate(factor(nfacto))
   do I = 1, number_of_wave_vectors
      write(*,*) "all-points",all_kpoints(I,:)
@@ -596,9 +726,14 @@ program main
         ! is equal to the point group of the space group
         kgord = order
         mtab2(1:kgord, 1:kgord) = mtab(1:kgord, 1:kgord)
+        write(*,*)
+        write(*,*) "=========================================="
+        write(*,*) "Multiplication Table"
+        write(*,*) "=========================================="
         do I = 1, kgord
-           write(*,*)mtab(i,:)
+           write(*,'(48I3)') mtab(i,1:kgord)
         end do
+        write(*,*)
 
         do I = 1, kgord
            kgel(I) = I
@@ -622,9 +757,18 @@ program main
      ! calculation of the diagonal element of the irreducible representations
      ! section 6.1
 
-     write(*,*) "Projection matrices for the wave vector" , srk(1:3)
-     write(*,*) "The pointgroup of the wave vector consists of ", kg, " operators, indexed as numbers:"
-     write(*,*) kkgel(1:kg)
+     write(*,*)
+     write(*,*) "=========================================="
+     write(*,*) "Projection Matrices"
+     write(*,*) "=========================================="
+     write(*,'(A,3F10.6)') " Wave vector: ", srk(1:3)
+     write(*,*)
+     write(*,'(A,I4,A)') " Point group of wave vector: ", kg, " operators"
+     write(*,*) "Operator indices:"
+     do I = 1, kg, 12
+        write(*,'(12I6)') kkgel(I:min(I+11, kg))
+     end do
+     write(*,*)
 
      is_ski = ((steer(20) .ne. 0) .or. (ksym .ne. 0) .or. (ibz .ne. 0)) 
      if (.not. is_ski) then
@@ -707,10 +851,18 @@ program main
        call sym_projmat(laj, kgord, allow, jpdd, projmatrix(ikp,:,:), nvec, nat, lmax, np, nel, ncl, npl, &
             & kgel, kkgel, listp, steer, ksym, ibz, K48, ldrmm, rk, u,tsmall, ttsmall)
 
-        100 FORMAT(12(F7.3, F7.3))
+       write(*,*)
+       write(*,*) "=========================================="
+       write(*,*) "Projection Matrix"
+       write(*,*) "=========================================="
+       write(*,'(A,I3,A,3F8.4)') " K-point ", ikp, ": ", all_kpoints(ikp,:)
+       write(*,*) "Matrix dimension:", matrixorder, "x", matrixorder
+       write(*,*)
+        100 FORMAT(12('(',F6.3,',',F6.3,')'))
        do I = 1, matrixorder
           write(*,100) projmatrix(ikp, I, :)
        end do
+       write(*,*)
 
 
        deallocate(laj)

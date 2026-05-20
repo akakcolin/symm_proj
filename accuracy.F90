@@ -91,5 +91,12 @@ module accuracy
 
   !!* Tolerance for the dispersion damping function being considered 1
   real(dp), parameter :: tolDispDamp = 1.0e-10_dp
-  
+
+  !!* Symmetry analysis tolerances
+  real(dp), parameter :: tol_zero = 1.0e-10_dp      !* Tolerance for zero check
+  real(dp), parameter :: tol_equal = 1.0e-8_dp      !* Tolerance for equality check
+  real(dp), parameter :: tol_orthog = 1.0e-6_dp     !* Tolerance for orthogonality
+  real(dp), parameter :: tol_phase = 1.0e-6_dp      !* Tolerance for phase factor comparison
+  real(dp), parameter :: tol_projection = 1.0e-8_dp !* Tolerance for projection matrix validation
+
 end module accuracy

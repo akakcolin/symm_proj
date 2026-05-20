@@ -129,62 +129,102 @@ contains
 
 
     if(debug .eq. 1) then
-       write(*,*) "Rotation angles for group Oh"
-
+       write(*,*)
+       write(*,*) "=========================================="
+       write(*,*) "Rotation Angles for Group Oh"
+       write(*,*) "=========================================="
+       write(*,*) "Element    Phi            Theta          Psi"
        do I = 1, 48
-          write(*,*) I, Oh(1:3, I)
+          write(*,'(I5,3F15.10)') I, Oh(1:3, I)
        end do
 
-       write(*,*) "Rotation angles for group D6h"
-
+       write(*,*)
+       write(*,*) "=========================================="
+       write(*,*) "Rotation Angles for Group D6h"
+       write(*,*) "=========================================="
+       write(*,*) "Element    Phi            Theta          Psi"
        do I = 1, 24
-          write(*,*) I, D6h(1:3, I)
+          write(*,'(I5,3F15.10)') I, D6h(1:3, I)
        end do
 
 
-       write(*,*) "The group Oh multiplication table:"
-
+       write(*,*)
+       write(*,*) "=========================================="
+       write(*,*) "Group Oh Multiplication Table"
+       write(*,*) "=========================================="
+       write(*,*) "Row x Column = Result"
+       write(*,*)
        do I = 1, 24
-          write(*,*) MOh(:, I)
+          write(*,'(48I3)') MOh(:, I)
        end do
 
-       write(*,*) "The group D6h multiplication table:"
-
+       write(*,*)
+       write(*,*) "=========================================="
+       write(*,*) "Group D6h Multiplication Table"
+       write(*,*) "=========================================="
+       write(*,*) "Row x Column = Result"
+       write(*,*)
        do I = 1, 12
-          write(*,*) MD6h(:, I)
+          write(*,'(24I3)') MD6h(:, I)
        end do
 
 
-       write(*,*) "npgo"
-       write(*,*) npgo(1,:)
-       write(*,*) npgo(2,:)   
+       write(*,*)
+       write(*,*) "=========================================="
+       write(*,*) "Point Group Statistics"
+       write(*,*) "=========================================="
+       write(*,*) "Number of point groups by order:"
+       write(*,'(A,36I4)') "  Order:  ", npgo(1,1:36)
+       write(*,'(A,36I4)') "  Count:  ", npgo(2,1:36)
 
-       write(*,*) "The group elements of the 429 crystallographic point groups:"
+       write(*,*)
+       write(*,*) "=========================================="
+       write(*,*) "Group Elements of 429 Point Groups"
+       write(*,*) "=========================================="
        do I = 1, 429
           K = npgo(1,I)
           L = npgo(2,I)
           L2 = L + K -1
-          write(*,*)  nge(L:L2)
+          if (K <= 12) then
+             write(*,'(A,I4,A,I3,A,12I4)') "Group", I, " (order", K, "):", nge(L:L2)
+          else if (K <= 24) then
+             write(*,'(A,I4,A,I3,A,24I4)') "Group", I, " (order", K, "):", nge(L:L2)
+          else
+             write(*,'(A,I4,A,I3,A,48I4)') "Group", I, " (order", K, "):", nge(L:L2)
+          end if
        end do
 
-       write(*,*) "Rotation/inverseion matrices"
-
+       write(*,*)
+       write(*,*) "=========================================="
+       write(*,*) "Rotation/Inversion Matrices"
+       write(*,*) "=========================================="
        do I = 1, 72
-          write(*,*) I
+          write(*,'(A,I3)') "Matrix ", I
           do K1=1,3
-             write(*,*) rgr3(K1,:,I)
+             write(*,'(3F12.6)') real(rgr3(K1,:,I))
           end do
+          write(*,*)
        end do
 
-       write(*,*)"One hundred prime numbers are calculated:"
-       write(*,*) primen(:)
+       write(*,*)
+       write(*,*) "=========================================="
+       write(*,*) "Prime Numbers (first 100)"
+       write(*,*) "=========================================="
+       do I = 1, 100, 10
+          write(*,'(10I7)') primen(I:min(I+9, 100))
+       end do
 
-       write(*,*) "Input, crystal with unit cell vectors"
+       write(*,*)
+       write(*,*) "=========================================="
+       write(*,*) "Input Crystal Structure"
+       write(*,*) "=========================================="
+       write(*,*) "Unit cell vectors:"
        do I = 1, 3
-          write(*,*) a(I,:)
+          write(*,'(3F12.6)') a(I,:)
        end do
 
-       write(*,*) "Reciprocal unit cell vectors are"
+       write(*,*)
+       write(*,*) "Reciprocal unit cell vectors:"
     end if
 
     T = 2*pi
@@ -196,7 +236,7 @@ contains
 
     if(debug .eq. 1) then
        do I = 1, 3
-          write(*,*) b(I, :)
+          write(*,'(3F12.6)') b(I, :)
        end do
 
        write(*,*) "pgnr, nel", pgnr, nel
@@ -388,9 +428,18 @@ contains
        ! calculation of the diagonal element of the irreducible representations
        ! section 6.1
 
-       write(*,*) "Projection matrices for the wave vector" , srk(1:3)
-       write(*,*) "The pointgroup of the wave vector consists of ", kg, " operators, indexed as numbers:"
-       write(*,*) kkgel(1:kg)
+       write(*,*)
+       write(*,*) "=========================================="
+       write(*,*) "Projection Matrices"
+       write(*,*) "=========================================="
+       write(*,'(A,3F10.6)') " Wave vector: ", srk(1:3)
+       write(*,*)
+       write(*,'(A,I4,A)') " Point group of wave vector: ", kg, " operators"
+       write(*,*) "Operator indices:"
+       do I = 1, kg, 12
+          write(*,'(12I6)') kkgel(I:min(I+11, kg))
+       end do
+       write(*,*)
 
        is_ski = ((steer(20) .ne. 0) .or. (ksym .ne. 0) .or. (ibz .ne. 0))
 
@@ -596,12 +645,19 @@ contains
 
           num_block(ikp)=nup
 
-          if (debug .eq. 1) then 
-100          FORMAT(12(F7.3, F7.3))
+          if (debug .eq. 1) then
+             write(*,*)
+             write(*,*) "=========================================="
+             write(*,*) "Projection Matrix"
+             write(*,*) "=========================================="
+             write(*,'(A,I3,A,3F8.4)') " K-point ", ikp, ": ", kpoints(ikp,:)
+             write(*,*) "Matrix dimension:", matrixorder, "x", matrixorder
+             write(*,*)
+100          FORMAT(12('(',F6.3,',',F6.3,')'))
              do I = 1, matrixorder
                 write(*,100) projmatrix(:,I, ikp)
              end do
-             write(*,*) "result"
+             write(*,*)
           end if
 
           if (debug .eq. 1) then 

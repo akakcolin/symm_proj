@@ -35,16 +35,32 @@ LIBS = -L/usr/local/lib -L/usr/lib -llapack -lblas
 # LIB_BLAS = -lptf77blas -lptcblas -latlas
 
 
-MODULES=   accuracy.o constants.o  message.o hall.o permu.o bztest.o groupkp.o sumsets.o projmat.o eigensolver.o intsec.o eigvec.o genera.o charac.o  subsp.o  classes.o  degen.o repres.o irrep.o  modsymprj.o orbmain.o
+MODULES=   accuracy.o constants.o  message.o hall.o permu.o bztest.o groupkp.o sumsets.o projmat.o eigensolver.o intsec.o eigvec.o genera.o charac.o  subsp.o  classes.o  degen.o repres.o irrep.o  modsymprj.o vasp_reader.o orbmain.o
+
+VASP_MODULES = accuracy.o constants.o message.o hall.o permu.o bztest.o groupkp.o sumsets.o projmat.o eigensolver.o intsec.o eigvec.o genera.o charac.o subsp.o classes.o degen.o repres.o irrep.o modsymprj.o vasp_reader.o sympw_vasp.o
 
 ALL=  $(MODULES)
 
-	
+
 sympw:$(ALL)
 	$(LN) $(FC90OPT) -o sympw $(ALL) $(LIBS)
-	
+
+sympw_vasp:$(VASP_MODULES)
+	$(LN) $(FC90OPT) -o sympw_vasp $(VASP_MODULES) $(LIBS)
+
+all: sympw sympw_vasp
+
 $(MODULES):%.o:%.F90
 	$(FC90)  -c  $*.F90
+
+vasp_reader.o: vasp_reader.F90 accuracy.o constants.o genera.o
+	$(FC90) -c vasp_reader.F90
+
+sympw_vasp.o: sympw_vasp.F90 accuracy.o constants.o vasp_reader.o modsymprj.o
+	$(FC90) -c sympw_vasp.F90
+
+orbmain.o: orbmain.F90 vasp_reader.o
+	$(FC90) -c orbmain.F90
 
 
 clean:

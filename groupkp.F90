@@ -48,15 +48,15 @@ contains
     integer :: II, K, I, J, K1, K2, I1
     real(dp), dimension(3) :: brk, robrk, rosk
     real(dp) :: TT, TTT
-    integer :: ntz 
+    integer :: ntz
     integer, allocatable :: inverk(:)
-
-    integer, dimension(230):: tmp_kgel ! tmp value , if bug, make it bigger
+    integer, allocatable :: tmp_kgel(:)
 
     !rk(1:3) = ark(1:3)*2*pi
     srk(1:3) = ark(1:3)
     write(*,*) "order", order
     allocate(inverk(order))
+    allocate(tmp_kgel(order))  ! Use actual group order instead of hardcoded 230
     inverk(:) = 1
     ! section 2.3
     kgord = 1
@@ -88,15 +88,15 @@ contains
 
        rosk(1:3) = rosk(1:3) - rk(1:3)
 
-       ! this difference should be a big k-vector, if the elements belongs to the group of the K-vector
+       ! this difference should be a reciprocal lattice vector (integer in reduced coordinates)
+       ! if the symmetry operation belongs to the group of the k-vector
 
        K1 = 1
        do while(K1 <= 3)
 
-          TT = abs(rosk(K1))
-          TTT = abs(TT - 2*pi)
-          if ((TT > tsmall) .and. (TTT > tsmall)) then
-             ! if this condition is fulfilled, rosk is not a big k-vector
+          TT = abs(rosk(K1) - nint(rosk(K1)))
+          if (TT > tsmall) then
+             ! if this condition is fulfilled, rosk is not a reciprocal lattice vector
              exit
           end if
           K1 = K1 + 1
@@ -184,7 +184,7 @@ contains
           end if
           I = I + 1
        end do
-       if (K > kgord) then
+       if (I > kgord) then
           ksym = 1
           if (steer(18) .eq. 1) then
              write(*,*) "Nonsymmorphic, but symmorph Gk"
@@ -199,6 +199,7 @@ contains
     end if
 
     deallocate(inverk)
+    deallocate(tmp_kgel)
 
   end subroutine sym_groupkp
   
@@ -308,7 +309,7 @@ contains
           K1 = 1
           do while (K1 <= NT)
              indk1 = nopli(index1, K1)
-             if (abs(sil(indk1) - sres) <= 0.05) then
+             if (abs(sil(indk1) - sres) <= 1.0e-6_dp) then
                 mtab3(I, K) = indk1
                 nr(I) = nr(I) + 1
                 exit

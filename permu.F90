@@ -24,7 +24,7 @@ contains
     integer, intent(out) :: numl
 
     integer, intent(in) :: multab(:,:)
-    integer, intent(in) :: G 
+    integer, intent(in) :: G
     integer, intent(in) :: inel(:)
     integer, intent(in) :: IN
     integer, intent(in) :: steer(:)
@@ -32,16 +32,16 @@ contains
     integer :: K
     integer :: L1, LT, K1, K2, N
     integer, allocatable :: flip(:)
-    
+
     allocate(flip(G))
-   
+
     flip(:) = 0
     K = inel(IN)
     K2 = 1
     numl = 0
     L1 = 1
     LT = 1
-    
+
     do K1=1, G
        if(flip(K1) .ne. 1) then
           flip(K1) = 1
@@ -51,11 +51,14 @@ contains
           do while(N .ne. K1)
              LT = LT + 1
              L1 = L1 + 1
+             if (LT > size(lpstr)) then
+                write(*,*) "ERROR: LT exceeds lpstr size! LT=", LT, "size=", size(lpstr)
+                stop
+             end if
              lpstr(LT) = N
              flip(N) = 1
              K2 = N
              N = multab(K, K2)
-             write(*,*) multab(K,K2)
           end do
           numl = numl + 1
           loopl(numl) = L1
