@@ -11,6 +11,8 @@
 !   Scenario 7: C4v(13), Gamma,        1 atom, lmax=1  (tetragonal, Oh subgroup)
 !   Scenario 8: Oh (36), Gamma,        2 atoms, lmax=2  (Si diamond primitive cell, non-symmorphic)
 !   Scenario 9: Oh (36), L-point,      8 atoms, lmax=2  (Si diamond conventional cell reduction)
+!   Scenario 10: Oh(36), X-point,      2 atoms, lmax=2  (Si diamond nonsymmorphic irrep filter)
+!   Scenario 11: Oh(36), X-point,      8 atoms, lmax=2  (conventional-cell k transform)
 !
 ! Each scenario verifies:
 !   (1) matrix_order matches the expected basis size
@@ -32,10 +34,15 @@ program test_lib
   real(dp) :: kpoint(3), max_err, trace_val
   integer, parameter :: checks_per_scenario = 7
   integer, parameter :: cell_info_checks = 3
-  integer, parameter :: scenario9_checks = checks_per_scenario + cell_info_checks
-  integer, parameter :: expected_scenarios = 9
+  integer, parameter :: kpoint_info_checks = 8
+  integer, parameter :: kpoint_basis_checks = 2
+  integer, parameter :: scenario9_checks = checks_per_scenario + cell_info_checks + kpoint_info_checks
+  integer, parameter :: scenario10_checks = checks_per_scenario + kpoint_info_checks
+  integer, parameter :: scenario11_checks = checks_per_scenario + cell_info_checks + &
+       kpoint_info_checks + kpoint_basis_checks
+  integer, parameter :: expected_scenarios = 11
   integer :: error_code, passed, total, scenario_passed, scenarios_ok, expected_order
-  real(dp) :: expected_transform(3,3)
+  real(dp) :: expected_transform(3,3), expected_kpoint(3)
 
   passed = 0
   total = 0
@@ -258,21 +265,82 @@ program test_lib
      call check_cell_info(.true., 2, expected_transform, scenario_passed, total)
      kpoint(:) = (/0.5_dp, 0.5_dp, 0.5_dp/)
      call sympw_analyze_kpoint(kpoint, result)
+     call check_kpoint_info(result, .true., 12, 12, 6, 6, 8, 8, scenario_passed, total)
      call check_result(result, expected_order, scenario_passed, total, max_err, trace_val, crystal%lmax, (/2/))
      call sympw_finalize()
   end if
   call teardown_crystal(crystal)
   passed = passed + scenario_passed
   if (scenario_passed == scenario9_checks) scenarios_ok = scenarios_ok + 1
-  write(*,'(A,I2,A)') "  Scenario 9: ", scenario_passed, "/10 checks passed"
+  write(*,'(A,I2,A)') "  Scenario 9: ", scenario_passed, "/18 checks passed"
+
+  ! ==========================================
+  ! Scenario 10: Oh (36), X-point, Si diamond primitive cell
+  !              Checks the nonsymmorphic factor-group branch where
+  !              lifted elements enlarge G_k/T_k and allow() filters
+  !              out irreps incompatible with the Bloch phase.
+  ! ==========================================
+  write(*,*)
+  write(*,*) "--- Scenario 10: Oh(36), X-point, Si diamond primitive cell ---"
+  scenario_passed = 0
+  expected_order = 18
+
+  call setup_diamond_primitive(crystal, 2, 36)
+  call sympw_init(crystal, error_code)
+  if (error_code /= 0) then
+     write(*,*) "  FAIL: init error_code =", error_code
+  else
+     kpoint(:) = (/0.5_dp, 0.0_dp, 0.5_dp/)
+     call sympw_analyze_kpoint(kpoint, result)
+     call check_kpoint_info(result, .true., 16, 32, 14, 4, 20, 8, scenario_passed, total)
+     call check_result(result, expected_order, scenario_passed, total, max_err, trace_val, crystal%lmax, crystal%nat)
+     call sympw_finalize()
+  end if
+  call teardown_crystal(crystal)
+  passed = passed + scenario_passed
+  if (scenario_passed == scenario10_checks) scenarios_ok = scenarios_ok + 1
+  write(*,'(A,I2,A)') "  Scenario 10: ", scenario_passed, "/15 checks passed"
+
+  ! ==========================================
+  ! Scenario 11: Oh (36), X-point, Si diamond conventional cell
+  !              Checks that API results preserve caller-basis k
+  !              and report the primitive-basis k used internally.
+  ! ==========================================
+  write(*,*)
+  write(*,*) "--- Scenario 11: Oh(36), X-point, Si diamond conventional cell ---"
+  scenario_passed = 0
+  expected_order = 18
+
+  call setup_diamond_conventional(crystal, 2, 36)
+  call sympw_init(crystal, error_code)
+  if (error_code /= 0) then
+     write(*,*) "  FAIL: init error_code =", error_code
+  else
+     expected_transform(:, :) = 0.0_dp
+     expected_transform(1, :) = (/0.0_dp, 0.5_dp, 0.5_dp/)
+     expected_transform(2, :) = (/0.5_dp, 0.0_dp, 0.5_dp/)
+     expected_transform(3, :) = (/0.5_dp, 0.5_dp, 0.0_dp/)
+     call check_cell_info(.true., 2, expected_transform, scenario_passed, total)
+     kpoint(:) = (/0.5_dp, 0.0_dp, 0.5_dp/)
+     expected_kpoint(:) = (/0.25_dp, 0.5_dp, 0.25_dp/)
+     call sympw_analyze_kpoint(kpoint, result)
+     call check_kpoint_basis(result, kpoint, expected_kpoint, scenario_passed, total)
+     call check_kpoint_info(result, .false., 4, 4, 4, 4, 4, 4, scenario_passed, total)
+     call check_result(result, expected_order, scenario_passed, total, max_err, trace_val, crystal%lmax, (/2/))
+     call sympw_finalize()
+  end if
+  call teardown_crystal(crystal)
+  passed = passed + scenario_passed
+  if (scenario_passed == scenario11_checks) scenarios_ok = scenarios_ok + 1
+  write(*,'(A,I2,A)') "  Scenario 11: ", scenario_passed, "/20 checks passed"
 
   ! ==========================================
   ! Summary
   ! ==========================================
   write(*,*)
   write(*,*) "=========================================="
-  write(*,'(A,I2,A,I2,A)') " Overall: ", passed, " / ", total, " checks passed"
-  write(*,'(A,I1,A,I1,A)') " Scenarios fully passing: ", scenarios_ok, " / ", expected_scenarios
+  write(*,'(A,I4,A,I4,A)') " Overall: ", passed, " / ", total, " checks passed"
+  write(*,'(A,I2,A,I2,A)') " Scenarios fully passing: ", scenarios_ok, " / ", expected_scenarios
   write(*,*) "=========================================="
 
   if (passed == total .and. scenarios_ok == expected_scenarios) then
@@ -432,6 +500,85 @@ contains
          merge(" PASS", " FAIL", transform_err < tol_equal)
     if (transform_err < tol_equal) sp = sp + 1
   end subroutine check_cell_info
+
+  subroutine check_kpoint_basis(res, expected_input, expected_internal, sp, tot)
+    type(sympw_result_t), intent(in) :: res
+    real(dp), intent(in) :: expected_input(3), expected_internal(3)
+    integer, intent(inout) :: sp, tot
+    real(dp) :: k_err
+
+    k_err = maxval(abs(res%kpoint_input(:) - expected_input(:)))
+    tot = tot + 1
+    write(*,'(A,E12.4,A)') "  Caller-basis k metadata error =", k_err, &
+         merge(" PASS", " FAIL", k_err < tol_equal)
+    if (k_err < tol_equal) sp = sp + 1
+
+    k_err = maxval(abs(res%kpoint_internal(:) - expected_internal(:)))
+    tot = tot + 1
+    write(*,'(A,E12.4,A)') "  Internal-basis k metadata error =", k_err, &
+         merge(" PASS", " FAIL", k_err < tol_equal)
+    if (k_err < tol_equal) sp = sp + 1
+  end subroutine check_kpoint_basis
+
+  subroutine check_kpoint_info(res, expected_factor, expected_little_order, &
+       expected_factor_order, expected_classes, expected_allowed_irreps, &
+       expected_irrep_dim_sum, expected_allowed_dim_sum, sp, tot)
+    type(sympw_result_t), intent(in) :: res
+    logical, intent(in) :: expected_factor
+    integer, intent(in) :: expected_little_order, expected_factor_order
+    integer, intent(in) :: expected_classes, expected_allowed_irreps
+    integer, intent(in) :: expected_irrep_dim_sum, expected_allowed_dim_sum
+    integer, intent(inout) :: sp, tot
+    logical :: ok
+
+    tot = tot + 1
+    ok = (res%factor_group_used .eqv. expected_factor)
+    write(*,'(A,A)') "  Factor-group metadata:", merge(" PASS", " FAIL", ok)
+    if (ok) sp = sp + 1
+
+    tot = tot + 1
+    ok = (res%little_group_order == expected_little_order)
+    write(*,'(A,I3,A,I3,A,A)') "  Little-group order:", res%little_group_order, &
+         " (expected", expected_little_order, ")", merge(" PASS", " FAIL", ok)
+    if (ok) sp = sp + 1
+
+    tot = tot + 1
+    ok = (res%factor_group_order == expected_factor_order)
+    write(*,'(A,I3,A,I3,A,A)') "  Factor-group order:", res%factor_group_order, &
+         " (expected", expected_factor_order, ")", merge(" PASS", " FAIL", ok)
+    if (ok) sp = sp + 1
+
+    tot = tot + 1
+    ok = (res%n_classes == expected_classes)
+    write(*,'(A,I3,A,I3,A,A)') "  Conjugacy classes:", res%n_classes, &
+         " (expected", expected_classes, ")", merge(" PASS", " FAIL", ok)
+    if (ok) sp = sp + 1
+
+    tot = tot + 1
+    ok = (res%n_irreps == expected_classes)
+    write(*,'(A,I3,A,I3,A,A)') "  Irrep count:", res%n_irreps, &
+         " (expected", expected_classes, ")", merge(" PASS", " FAIL", ok)
+    if (ok) sp = sp + 1
+
+    tot = tot + 1
+    ok = (res%n_allowed_irreps == expected_allowed_irreps)
+    write(*,'(A,I3,A,I3,A,A)') "  Allowed irrep count:", res%n_allowed_irreps, &
+         " (expected", expected_allowed_irreps, ")", merge(" PASS", " FAIL", ok)
+    if (ok) sp = sp + 1
+
+    tot = tot + 1
+    ok = (res%irrep_dimension_sum == expected_irrep_dim_sum)
+    write(*,'(A,I3,A,I3,A,A)') "  Irrep dimension sum:", res%irrep_dimension_sum, &
+         " (expected", expected_irrep_dim_sum, ")", merge(" PASS", " FAIL", ok)
+    if (ok) sp = sp + 1
+
+    tot = tot + 1
+    ok = (res%allowed_irrep_dimension_sum == expected_allowed_dim_sum)
+    write(*,'(A,I3,A,I3,A,A)') "  Allowed irrep dimension sum:", &
+         res%allowed_irrep_dimension_sum, " (expected", expected_allowed_dim_sum, ")", &
+         merge(" PASS", " FAIL", ok)
+    if (ok) sp = sp + 1
+  end subroutine check_kpoint_info
 
   subroutine check_result(res, expected_order, sp, tot, max_err, tr, lmax_list, nat_list)
     type(sympw_result_t), intent(in) :: res

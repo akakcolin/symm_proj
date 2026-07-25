@@ -70,6 +70,16 @@ module sympw_lib
      integer :: matrix_order                         ! total basis dimension
      complex(dp), allocatable :: projector(:,:)      ! projection matrix (matrix_order, matrix_order)
      logical :: success                               ! .true. if computation succeeded
+     real(dp) :: kpoint_input(3) = 0.0_dp             ! fractional k-point in caller basis
+     real(dp) :: kpoint_internal(3) = 0.0_dp          ! fractional k-point used internally
+     integer :: little_group_order = 0                ! order of the little co-group G_k
+     integer :: factor_group_order = 0                ! order of represented factor/lifted group
+     logical :: factor_group_used = .false.           ! .true. for nonsymmorphic G_k/T_k branch
+     integer :: n_classes = 0                         ! conjugacy classes in represented group
+     integer :: n_irreps = 0                          ! irrep count, equal to n_classes
+     integer :: n_allowed_irreps = 0                  ! irreps passing Bloch-phase allow filter
+     integer :: irrep_dimension_sum = 0               ! sum of represented irrep dimensions
+     integer :: allowed_irrep_dimension_sum = 0       ! sum after allow filtering
      integer :: n_blocks                              ! number of symmetry blocks
      type(sympw_block_t), allocatable :: blocks(:)    ! block-diagonal structure
   end type sympw_result_t
@@ -130,11 +140,7 @@ contains
 
     error_code = 0
 
-    if (library_initialized) then
-       call sympw_finalize()
-    end if
-
-    ! --- Validate inputs ---
+    ! --- Validate inputs before replacing any active library state ---
     if (crystal%pgnr < 1 .or. crystal%pgnr > 36) then
        write(*,*) "sympw_init: invalid point group number", crystal%pgnr
        error_code = 1
@@ -144,6 +150,60 @@ contains
        write(*,*) "sympw_init: no chemical elements"
        error_code = 2
        return
+    end if
+    if (.not. allocated(crystal%nat)) then
+       write(*,*) "sympw_init: nat array is not allocated"
+       error_code = 3
+       return
+    end if
+    if (size(crystal%nat) < crystal%nel) then
+       write(*,*) "sympw_init: nat array is smaller than nel"
+       error_code = 4
+       return
+    end if
+    if (.not. allocated(crystal%lmax)) then
+       write(*,*) "sympw_init: lmax array is not allocated"
+       error_code = 5
+       return
+    end if
+    if (size(crystal%lmax) < crystal%nel) then
+       write(*,*) "sympw_init: lmax array is smaller than nel"
+       error_code = 6
+       return
+    end if
+    if (any(crystal%nat(1:crystal%nel) < 1)) then
+       write(*,*) "sympw_init: atom counts must be positive"
+       error_code = 7
+       return
+    end if
+    if (any(crystal%lmax(1:crystal%nel) < 0)) then
+       write(*,*) "sympw_init: lmax values must be nonnegative"
+       error_code = 8
+       return
+    end if
+    if (.not. allocated(crystal%pos_frac)) then
+       write(*,*) "sympw_init: pos_frac array is not allocated"
+       error_code = 9
+       return
+    end if
+    if (size(crystal%pos_frac, 1) /= 3) then
+       write(*,*) "sympw_init: pos_frac first dimension must be 3"
+       error_code = 10
+       return
+    end if
+    if (size(crystal%pos_frac, 2) < crystal%nel) then
+       write(*,*) "sympw_init: pos_frac element dimension is smaller than nel"
+       error_code = 11
+       return
+    end if
+    if (size(crystal%pos_frac, 3) < maxval(crystal%nat(1:crystal%nel))) then
+       write(*,*) "sympw_init: pos_frac atom dimension is smaller than max(nat)"
+       error_code = 12
+       return
+    end if
+
+    if (library_initialized) then
+       call sympw_finalize()
     end if
 
     ! --- Cache and canonicalize crystal data ---
@@ -254,9 +314,22 @@ contains
     logical :: kpt_success
     integer :: ikp_dummy
 
+    result%matrix_order = 0
+    result%success = .false.
+    result%kpoint_input(:) = kpoint(:)
+    result%kpoint_internal(:) = 0.0_dp
+    result%little_group_order = 0
+    result%factor_group_order = 0
+    result%factor_group_used = .false.
+    result%n_classes = 0
+    result%n_irreps = 0
+    result%n_allowed_irreps = 0
+    result%irrep_dimension_sum = 0
+    result%allowed_irrep_dimension_sum = 0
+    result%n_blocks = 0
+
     if (.not. library_initialized) then
        write(*,*) "sympw_analyze_kpoint: library not initialized"
-       result%success = .false.
        return
     end if
 
@@ -266,13 +339,21 @@ contains
     else
        kpoint_internal(:) = kpoint(:)
     end if
+    result%kpoint_internal(:) = kpoint_internal(:)
 
     call sympw_compute_kpoint(kpoint_internal, a_lat, ai_lat, b_lat, bi_lat, &
          nel_cached, nat_arr, lmax_arr, order, r_cart, u, &
          pgnr_cached, pg_data%rgr3, pg_data%ldrmm, mtab, gel, &
          steer, npri, tsmall, ttsmall, &
          ikp_dummy, matrix_order_per_kpt, result%projector, kpt_success, &
-         verbosity=sympw_verbosity)
+         verbosity=sympw_verbosity, &
+         little_group_order=result%little_group_order, &
+         factor_group_order=result%factor_group_order, &
+         factor_group_used=result%factor_group_used, &
+         n_classes=result%n_classes, n_irreps=result%n_irreps, &
+         n_allowed_irreps=result%n_allowed_irreps, &
+         irrep_dimension_sum=result%irrep_dimension_sum, &
+         allowed_irrep_dimension_sum=result%allowed_irrep_dimension_sum)
 
     ! sym_projmat assembles the symmetry-adapted basis T (not the projector).
     ! The true projection matrix onto the symmetry-adapted subspace is P = T * T^H.
@@ -283,7 +364,6 @@ contains
 
     result%matrix_order = matrix_order_per_kpt
     result%success = kpt_success
-    result%n_blocks = 0
     if (kpt_success) then
        call extract_connected_blocks(result)
     end if

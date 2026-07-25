@@ -58,10 +58,20 @@ contains
   !   projmatrix_out - projection matrix (matrixorder, matrixorder)
   !   matrixorder    - total basis function dimension
   !   success        - .true. if computation completed
+  ! Optional output metadata:
+  !   little_group_order       - order of little co-group G_k
+  !   factor_group_order       - order of represented factor/lifted group
+  !   factor_group_used        - .true. for nonsymmorphic G_k/T_k branch
+  !   n_classes, n_irreps      - conjugacy-class count and irrep count
+  !   n_allowed_irreps         - irreps passing the Bloch-phase allow filter
+  !   *_dimension_sum          - sums over represented/allowed irrep dimensions
 
   subroutine sympw_compute_kpoint(rk, a, ai, b, bi, nel, nat, lmax, order, r, u, &
        pgnr, rgr3, ldrmm, mtab, gel, steer, npri, tsmall, ttsmall, &
-       ikp, matrixorder, projmatrix_out, success, verbosity)
+       ikp, matrixorder, projmatrix_out, success, verbosity, &
+       little_group_order, factor_group_order, factor_group_used, &
+       n_classes, n_irreps, n_allowed_irreps, &
+       irrep_dimension_sum, allowed_irrep_dimension_sum)
     real(dp), intent(in) :: rk(3)
     real(dp), intent(in) :: a(3,3), ai(3,3), b(3,3), bi(3,3)
     integer, intent(in) :: nel
@@ -83,6 +93,14 @@ contains
     complex(dp), allocatable, intent(out) :: projmatrix_out(:,:)
     logical, intent(out) :: success
     integer, intent(in), optional :: verbosity
+    integer, intent(out), optional :: little_group_order
+    integer, intent(out), optional :: factor_group_order
+    logical, intent(out), optional :: factor_group_used
+    integer, intent(out), optional :: n_classes
+    integer, intent(out), optional :: n_irreps
+    integer, intent(out), optional :: n_allowed_irreps
+    integer, intent(out), optional :: irrep_dimension_sum
+    integer, intent(out), optional :: allowed_irrep_dimension_sum
 
     ! Local variables - operator-ID-indexed rotation matrices
     real(dp), allocatable :: rgr(:,:,:)
@@ -107,7 +125,7 @@ contains
     integer, allocatable :: np(:,:,:)
     real(dp), allocatable :: nvec(:,:,:,:,:)
     integer, allocatable :: npl(:,:,:,:)
-    integer :: nal, nblock, nup, nip, ichem, L, N
+    integer :: nal, nblock, nup, nip, nallowed, ichem, L, N
     integer, allocatable :: nalr(:)
 
     ! Other locals
@@ -121,6 +139,14 @@ contains
     logical :: override_verbosity, irrep_ok
 
     success = .false.
+    if (present(little_group_order)) little_group_order = 0
+    if (present(factor_group_order)) factor_group_order = 0
+    if (present(factor_group_used)) factor_group_used = .false.
+    if (present(n_classes)) n_classes = 0
+    if (present(n_irreps)) n_irreps = 0
+    if (present(n_allowed_irreps)) n_allowed_irreps = 0
+    if (present(irrep_dimension_sum)) irrep_dimension_sum = 0
+    if (present(allowed_irrep_dimension_sum)) allowed_irrep_dimension_sum = 0
     out_level = 1
     override_verbosity = present(verbosity)
     if (override_verbosity) out_level = max(0, verbosity)
@@ -223,6 +249,9 @@ contains
     end if
 
     is_ski = ((steer(20) .ne. 0) .or. (ksym .ne. 0) .or. (ibz .ne. 0))
+    if (present(little_group_order)) little_group_order = kg
+    if (present(factor_group_order)) factor_group_order = kgord
+    if (present(factor_group_used)) factor_group_used = .not. is_ski
     if (.not. is_ski) then
        if (out_level >= 1) then
           write(*,'(A,I4,A)') " Factor group Gk/Tk active with ", kgord, " lifted elements"
@@ -263,6 +292,8 @@ contains
        end if
 
        if (out_level >= 1) write(*,'(A,I3,A)') " Found ", ncl, " conjugacy classes"
+       if (present(n_classes)) n_classes = ncl
+       if (present(n_irreps)) n_irreps = ncl
 
        allocate(nalr(ncl))
        if (.not. irrep_ok) then
@@ -274,15 +305,24 @@ contains
 
        nup = 0
        nip = 0
+       nallowed = 0
        do I = 1, ncl
           nip = nip + laj(I)
-          if (allow(I) .ne. 0) nup = nup + laj(I)
+          if (allow(I) .ne. 0) then
+             nup = nup + laj(I)
+             nallowed = nallowed + 1
+          end if
        end do
 
        if (out_level >= 1) then
-          write(*,'(A,I3,A)') " Total irreducible representations: ", nip
-          write(*,'(A,I3,A)') " Allowed representations: ", nup
+          write(*,'(A,I3,A)') " Irreducible representations: ", ncl
+          write(*,'(A,I3,A)') " Allowed representations: ", nallowed
+          write(*,'(A,I3)') " Irrep dimension sum: ", nip
+          write(*,'(A,I3)') " Allowed irrep dimension sum: ", nup
        end if
+       if (present(n_allowed_irreps)) n_allowed_irreps = nallowed
+       if (present(irrep_dimension_sum)) irrep_dimension_sum = nip
+       if (present(allowed_irrep_dimension_sum)) allowed_irrep_dimension_sum = nup
 
        if (nip .ne. nup) then
           nal = 0
