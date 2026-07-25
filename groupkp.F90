@@ -47,7 +47,7 @@ contains
     real(dp), dimension(3) :: srk
     integer :: II, K, I, J, K1, K2, I1
     real(dp), dimension(3) :: brk, robrk, rosk
-    real(dp) :: TT, TTT
+    real(dp) :: TT, TTT, membership_tol
     integer :: ntz
     integer, allocatable :: inverk(:)
     integer, allocatable :: tmp_kgel(:)
@@ -64,7 +64,8 @@ contains
     end if
     allocate(inverk(order))
     allocate(tmp_kgel(order))  ! Use actual group order instead of hardcoded 230
-    inverk(:) = 1
+    inverk(:) = 0
+    membership_tol = max(tsmall, tol_lattice_integer)
     ! section 2.3
     kgord = 1
     tmp_kgel(1) = 1
@@ -74,7 +75,7 @@ contains
     !brk(1:3) = matmul(b(1:3, 1:3), rk(1:3))
 
     do II = 1, 3
-       brk(II) = dot_product(b(II, 1:3), rk(1:3))
+       brk(II) = dot_product(b(II, 1:3), ark(1:3))
     end do
 
     ! brk is the wave vector expressed in cartesian coordinates
@@ -93,7 +94,7 @@ contains
 
        ! rosk is the rotated wave vector in reciprocal lattice coordinates
 
-       rosk(1:3) = rosk(1:3) - rk(1:3)
+       rosk(1:3) = rosk(1:3) - ark(1:3)
 
        ! this difference should be a reciprocal lattice vector (integer in reduced coordinates)
        ! if the symmetry operation belongs to the group of the k-vector
@@ -102,7 +103,7 @@ contains
        do while(K1 <= 3)
 
           TT = abs(rosk(K1) - nint(rosk(K1)))
-          if (TT > tsmall) then
+          if (TT > membership_tol) then
              ! if this condition is fulfilled, rosk is not a reciprocal lattice vector
              exit
           end if
@@ -146,6 +147,9 @@ contains
 
     do I = 1, kgord
        do J = 1, kgord
+          if (inverk(mtab2(I, J)) == 0) then
+             error stop "Little-group multiplication table is not closed"
+          end if
           mtab2(I, J) = inverk(mtab2(I, J))
        end do
     end do
@@ -154,6 +158,18 @@ contains
     end if
 
     call validate_little_group(mtab2, kgord, tol_group_closure)
+
+    k2gord = kgord
+    ibz = 1
+    ksym = 1
+    nopi1 = 1
+    nopli1(:) = 1
+    listp(:) = 0
+    do I = 1, kgord
+       listp(I) = I
+    end do
+    til(:,:) = 0.0_dp
+    sil(:) = cmplx(1.0_dp, 0.0_dp, dp)
 
     ! section 3
     ! tests for the nonsymmorphic space group
@@ -170,7 +186,7 @@ contains
           write(*,*) "=========================================="
           write(*,*) "WARNING: K-point Outside Brillouin Zone"
           write(*,*) "=========================================="
-          write(*,'(A,3F12.6)') " K-point: ", rk(1:3)
+          write(*,'(A,3F12.6)') " K-point: ", ark(1:3)
           write(*,*)
           return
        end if
@@ -210,7 +226,6 @@ contains
        end if
 
        if ( (ibz .eq. 0) .and. (I <= kgord)) then
-           write(*,*) "call factorgroup"
           call factorgroup(listp, k2gord, kgord, nopi, nopi1, nopli, nopli1, mtab2, til, &
                & sil, kgel, a, ai, b, u, rk, rgr )
        end if
@@ -321,115 +336,135 @@ contains
     real(dp), intent(in) :: rk(:)
     real(dp), intent(in) :: rgr(:,:,:)
 
-
     integer, allocatable :: mtab3(:,:)
-    integer :: I, II, K, K1, K2, NT
-    complex(dp) :: sres, R4
-    real(dp) :: ar
-    integer :: N1, N2, N3
-    integer :: index1, indk1
+    integer :: I, point_index, existing_index
+    integer :: left_index, right_index, product_point
+    integer :: factor_capacity, initial_kgord, previous_order
+    real(dp), dimension(3) :: product_translation
+    complex(dp) :: product_phase
 
-    real(dp), dimension(3) :: tsk, rprod
-    integer, allocatable :: nr(:)
+    initial_kgord = kgord
+    k2gord = initial_kgord
+    factor_capacity = min(size(mtab2, 1), size(mtab2, 2), size(listp), size(sil), &
+         & size(til, 1), size(nopli, 2))
 
-    k2gord = kgord
+    if (initial_kgord > factor_capacity) then
+       error stop "Factor-group capacity smaller than little-group order"
+    end if
 
-    allocate(mtab3(48, 48))
-    allocate(nr(48))
+    allocate(mtab3(factor_capacity, factor_capacity))
+    mtab3(:,:) = 0
+    listp(:) = 0
+    til(:,:) = 0.0_dp
+    sil(:) = cmplx(0.0_dp, 0.0_dp, dp)
+    nopi(:) = 0
+    nopli(:,:) = 0
+    nopli1(:) = 1
 
-    do I = 1, k2gord
+    do I = 1, initial_kgord
        listp(I) = I
-       K1 = kgel(I)
-       til(I, 1:3) = u(K1, 1:3)
+       point_index = kgel(I)
+       til(I, 1:3) = u(point_index, 1:3)
+       sil(I) = bloch_phase(til(I, 1:3))
        nopi(I) = 1
        nopli(I, 1) = I
-       mtab3(1, I) = I
-       mtab3(I, 1) = I
-       nr(I) = 1
-       ar = dot_product(til(I, 1:3), rk(1:3))
-       !write(*,*) "ar", ar
-       sres = cmplx(0, -ar)
-       sil(I) = exp(sres)
-       !write(*,*) "sil", sil(I)
     end do
-    nr(1) = k2gord
-    I = 2
 
-    do while (I <= k2gord)
-       K = nr(I) + 1
-       N1 = listp(I)
-       N3 = kgel(N1)
+    til(1, 1:3) = 0.0_dp
+    sil(1) = cmplx(1.0_dp, 0.0_dp, dp)
 
-       do while ( K <= k2gord)
+    do
+       previous_order = k2gord
+       do left_index = 1, k2gord
+          do right_index = 1, k2gord
+             if (mtab3(left_index, right_index) /= 0) cycle
 
-          N2 = listp(K)
-          index1 = mtab2(N1, N2)
+             call multiply_factor_elements(left_index, right_index, product_point, &
+                  & product_translation, product_phase)
 
-          !todo check 
-          do II = 1, 3
-             tsk(II) = dot_product(a(II, 1:3), til(K, 1:3))
-          end do
+             existing_index = find_factor_element(product_point, product_phase)
+             if (existing_index == 0) then
+                if (k2gord >= factor_capacity) then
+                   error stop "Factor-group capacity exceeded"
+                end if
+                if (nopi(product_point) >= size(nopli, 2)) then
+                   error stop "Too many factor-group lifts for one point operation"
+                end if
 
-          do II = 1, 3
-             rprod(II) =dot_product(rgr(1:3, II, N3), tsk(1:3))
-          end do
-
-          tsk(1:3) = rprod(1:3)
-          do K1 = 1, 3
-             rprod(K1) = dot_product(ai(1:3, K1), tsk(1:3))
-             rprod(K1) = rprod(K1) + til(I, K1)
-          end do
-
-          ar = dot_product(rk(1:3), rprod(1:3))
-
-          R4 = cmplx(0, -ar)
-          sres = exp(R4)
-          NT = nopi(index1)
-          K1 = 1
-          do while (K1 <= NT)
-             indk1 = nopli(index1, K1)
-             if (abs(sil(indk1) - sres) <= 1.0e-6_dp) then
-                mtab3(I, K) = indk1
-                nr(I) = nr(I) + 1
-                exit
+                k2gord = k2gord + 1
+                existing_index = k2gord
+                listp(existing_index) = product_point
+                til(existing_index, 1:3) = product_translation(1:3)
+                sil(existing_index) = product_phase
+                nopi(product_point) = nopi(product_point) + 1
+                nopli(product_point, nopi(product_point)) = existing_index
              end if
-             K1 = K1 + 1
-          end do
 
-          if (K1 > NT) then
-             k2gord = k2gord + 1
-             mtab3(I, K) = k2gord
-             nr(I) = nr(I) + 1
-             mtab3(1, k2gord)  = k2gord
-             nr(1) = k2gord
-             mtab3(k2gord, 1) = k2gord
-             nr(k2gord) = 1
-             listp(k2gord) = index1
-             til(k2gord, 1:3) = rprod(1:3)
-             sil(k2gord) = sres
-             nopi(index1) = nopi(index1) + 1
-             K2 = nopi(index1)
-             nopli(index1, K2) = k2gord
-             if (I .ne. 2) then
-                I = 2
-                K = nr(I)
-                N1 = listp(I)
-                N3 = kgel(N1)
-             end if
-          end if
-          K = K + 1
+             mtab3(left_index, right_index) = existing_index
+          end do
        end do
-       I = I + 1
+
+       if (.not. any(mtab3(1:k2gord, 1:k2gord) == 0)) exit
+       if (k2gord == previous_order) then
+          error stop "Factor-group multiplication table is incomplete"
+       end if
     end do
+
+    call validate_little_group(mtab3, k2gord, tol_group_closure)
 
     kgord = k2gord
     nopi1 = nopi(1)
     nopli1(1:nopi1) = nopli(1, 1:nopi1)
-
     mtab2(1:kgord, 1:kgord) = mtab3(1:kgord, 1:kgord)
 
     deallocate(mtab3)
-    deallocate(nr)
+
+  contains
+
+    complex(dp) function bloch_phase(translation) result(phase)
+      real(dp), intent(in) :: translation(3)
+      complex(dp) :: phase_argument
+
+      phase_argument = cmplx(0.0_dp, -dot_product(rk(1:3), translation(1:3)), dp)
+      phase = exp(phase_argument)
+    end function bloch_phase
+
+    subroutine multiply_factor_elements(left, right, product_point_out, translation_out, phase_out)
+      integer, intent(in) :: left, right
+      integer, intent(out) :: product_point_out
+      real(dp), intent(out) :: translation_out(3)
+      complex(dp), intent(out) :: phase_out
+
+      integer :: left_point, right_point, rotation_index
+      real(dp) :: translation_cart(3), rotated_cart(3), rotated_fractional(3)
+
+      left_point = listp(left)
+      right_point = listp(right)
+      product_point_out = mtab2(left_point, right_point)
+      rotation_index = kgel(left_point)
+
+      translation_cart = matmul(transpose(a(1:3, 1:3)), til(right, 1:3))
+      rotated_cart = matmul(rgr(1:3, 1:3, rotation_index), translation_cart)
+      rotated_fractional = matmul(ai(1:3, 1:3), rotated_cart)
+      translation_out(1:3) = til(left, 1:3) + rotated_fractional(1:3)
+      phase_out = bloch_phase(translation_out)
+    end subroutine multiply_factor_elements
+
+    integer function find_factor_element(point, phase) result(found_index)
+      integer, intent(in) :: point
+      complex(dp), intent(in) :: phase
+
+      integer :: candidate_number, candidate_index
+
+      found_index = 0
+      do candidate_number = 1, nopi(point)
+         candidate_index = nopli(point, candidate_number)
+         if (abs(sil(candidate_index) - phase) <= tol_irrep_phase) then
+            found_index = candidate_index
+            return
+         end if
+      end do
+    end function find_factor_element
 
   end subroutine factorgroup
 

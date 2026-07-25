@@ -38,21 +38,19 @@ contains
     lcm = (p*q)/k
   end function lcm
   
-  ! calculates the interger I modulus P and returns this value in the integer J
+  ! Return I modulo P, with result in [0, P-1].
   integer function modulus(I, P)
     implicit none
     integer, intent(in) :: I
     integer, intent(in) :: P
     integer :: K
-    if(I < 0) then
-       K = I
-       do while( K < 0)
+    K = I
+    if (K < 0) then
+       do while (K < 0)
           K = K + P
        end do
-    end if
-    if(I>=0) then
-       K = I
-       do while( K>= P)
+    else if (K >= P) then
+       do while (K >= P)
           K = K - P
        end do
     end if
@@ -69,16 +67,14 @@ contains
 
   !A conjugate class whose elements have the lowest possible degeneracy is registered for each irreducible representation,
   !in case there are no non-degenerate eigenvalues.
-  subroutine sym_charac(ch, cind, onert, sirt, lj, norder, cind_invp, multab, G, ncl, h, nfirst, classl, inel, steer, prime)
+  subroutine sym_charac(ch, cind, onert, sirt, lj, norder, multab, G, ncl, h, nfirst, classl, inel, steer, prime)
     complex(dp), intent(out) :: ch(:,:)
     integer, intent(out) :: cind(:)
     integer, intent(out) :: onert(:)
     integer, intent(out) :: sirt(:,:)
     integer, intent(out) :: lj(:)
     integer, intent(out) :: norder(:)
-    integer, intent(out) :: cind_invp(:) ! inverse module P
-
-    integer, intent(in) :: multab(:,:) 
+    integer, intent(in) :: multab(:,:)
     integer, intent(in) :: G
     integer, intent(in) :: ncl
     integer, intent(in) :: h(:)
@@ -156,14 +152,16 @@ contains
              cind(N) = I
           end do
        end do
-       write(*,*)
-       write(*,*) "=========================================="
-       write(*,*) "Class Structure"
-       write(*,*) "=========================================="
-       write(*,*) "Class index for each group element:"
-       do I = 1, M, 12
-          write(*,'(12I6)') cind(I:min(I+11, M))
-       end do
+       if (steer(12) > 0) then
+          write(*,*)
+          write(*,*) "=========================================="
+          write(*,*) "Class Structure"
+          write(*,*) "=========================================="
+          write(*,*) "Class index for each group element:"
+          do I = 1, M, 12
+             write(*,'(12I6)') cind(I:min(I+11, M))
+          end do
+       end if
        do I = 1, ncl
           onert(I) = 0
           K = nfirst(I)
@@ -187,28 +185,30 @@ contains
           end if
        end do
 
-       write(*,*)
-       write(*,*) "Order of each class:"
-       do I = 1, ncl, 12
-          write(*,'(12I6)') norder(I:min(I+11, ncl))
-       end do
+       if (steer(12) > 0) then
+          write(*,*)
+          write(*,*) "Order of each class:"
+          do I = 1, ncl, 12
+             write(*,'(12I6)') norder(I:min(I+11, ncl))
+          end do
 
-       write(*,*)
-       write(*,*) "Power table (class I raised to power J):"
-       do I = 1, ncl
-          write(*,'(A,I3,A,12I6)') "  Class", I, ":", npow(I, 1:min(12, ncl))
-          if (ncl > 12) then
-             do J = 13, ncl, 12
-                write(*,'(9X,12I6)') npow(I, J:min(J+11, ncl))
-             end do
-          end if
-       end do
+          write(*,*)
+          write(*,*) "Power table (class I raised to power J):"
+          do I = 1, ncl
+             write(*,'(A,I3,A,12I6)') "  Class", I, ":", npow(I, 1:min(12, ncl))
+             if (ncl > 12) then
+                do J = 13, ncl, 12
+                   write(*,'(9X,12I6)') npow(I, J:min(J+11, ncl))
+                end do
+             end if
+          end do
 
-       write(*,*)
-       write(*,*) "Conjugate class of each class:"
-       do I = 1, ncl, 12
-          write(*,'(12I6)') nconj(I:min(I+11, ncl))
-       end do
+          write(*,*)
+          write(*,*) "Conjugate class of each class:"
+          do I = 1, ncl, 12
+             write(*,'(12I6)') nconj(I:min(I+11, ncl))
+          end do
+       end if
 
        ! Find the exponent ex, the least common multiple of norder(I) , I = 1:ncl
 
@@ -220,7 +220,7 @@ contains
           ex=lcm(N, M)
        end do
 
-       write(*,*) "The exponent of the group is ", ex
+       if (steer(12) > 0) write(*,*) "The exponent of the group is ", ex
 
        ! section 3
        ! Determine prime P, such that ex divides P - 1
@@ -235,7 +235,7 @@ contains
           end if
        end do
 
-       write(*,*) "The prime P, such that ex divides P-1 is ", P
+       if (steer(12) > 0) write(*,*) "The prime P, such that ex divides P-1 is ", P
        ! section 4
        ! Determine a primitive root Z, such that Z^ex == 1 (modules P) but
        ! Z^1 ~= 1 (mod P) for I < ex
@@ -293,10 +293,6 @@ contains
                 exit
              end if
           end do
-       end do
-
-       do I = 1, M
-        cind_invp(I) = inv(I)
        end do
 
        if(steer(6) > 0) then

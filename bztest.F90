@@ -21,79 +21,40 @@ contains
     real(dp), intent(in) :: rk(:)
     real(dp), intent(in) :: b(:,:)
 
-    integer :: I, I1, K1, K2
-    integer :: nbz
-    integer, dimension(3):: signe
-    real(dp) :: bnorm, ckinp
-    real(dp), dimension(3) :: cark, c
-    
-    signe(:) = 1
+    integer :: n1, n2, n3
+    real(dp) :: cark(3), gvec(3), nred(3)
+    real(dp) :: zero_norm, shifted_norm, metric_tol
+    logical :: on_boundary
 
-    do I = 1,3
-       IF(rk(I) < 0) then
-          signe(I) = -1
-       end IF
+    cark(1:3) = matmul(b(1:3, 1:3), rk(1:3))
+    zero_norm = sum(cark(1:3)**2)
+    metric_tol = 1.0e-10_dp * max(1.0_dp, zero_norm)
+    on_boundary = .false.
+
+    do n1 = -3, 3
+       do n2 = -3, 3
+          do n3 = -3, 3
+             if (n1 == 0 .and. n2 == 0 .and. n3 == 0) cycle
+
+             nred(:) = [real(n1, dp), real(n2, dp), real(n3, dp)]
+             gvec(1:3) = matmul(b(1:3, 1:3), nred(1:3))
+             shifted_norm = sum((cark(1:3) - gvec(1:3))**2)
+
+             if (zero_norm - shifted_norm > metric_tol) then
+                ntz = 1
+                return
+             end if
+             if (abs(zero_norm - shifted_norm) <= metric_tol) then
+                on_boundary = .true.
+             end if
+          end do
+       end do
     end do
-    ! need to check 
-    cark(1) = b(1,1)*rk(1) + b(1,2)*rk(2) + b(1,3) * rk(3)
-    cark(2) = b(2,1)*rk(1) + b(2,2)*rk(2) + b(2,3) * rk(3)
-    cark(3) = b(3,1)*rk(1) + b(3,2)*rk(2) + b(3,3) * rk(3)
-    
-    !cark(1:3) = b(1:3, 1:3)*transpose(rk(1:3))
-    nbz = 0
-    do I1 = 1, 7
-       if(I1 <= 3) then
-          !c(1:3) = b(1:3, I1)*signe(I1)
-          c(1) = b(1, I1)*signe(I1)
-          c(2) = b(2, I1)*signe(I1)
-          c(3) = b(3, I1)*signe(I1)
-       end if
-       if(I1 > 3) then
-          if (I1 < 7) then
-             if ( I1 == 4) then
-                K1 = 1
-                K2 = 2
-             end if
-             if (I1 == 5) then
-                K2 = 3
-             end if
-             if( I1== 6) then
-                K1 = 2
-             end if
-             !
-             c(1) = b(1,K1)*signe(K1) + b(1,K2)*signe(K2)
-             c(2) = b(2,K1)*signe(K1) + b(2,K2)*signe(K2)
-             c(3) = b(3,K1)*signe(K1) + b(3,K2)*signe(K2)
-             !c(1:3) = b(1:3, K1)*signe(K1) + b(1:3, K2)*signe(K2)
-          else
-             c(1) = b(1,1)*rk(1) + b(1,2)*rk(2) + b(1,3) * rk(3)
-             c(2) = b(2,1)*rk(1) + b(2,2)*rk(2) + b(2,3) * rk(3)
-             c(3) = b(3,1)*rk(1) + b(3,2)*rk(2) + b(3,3) * rk(3)
-             !c(1:3) = b(1:3, 1:3)* transpose(signe(1:3))
-          end if
-       end if
-       ! test if the projection of rk on vector c is less then half the length of c
-       bnorm = 0.5*(c(1)**2 + c(2)**2 + c(3)**2)
-       ! the adapted signs ensure tests in the right octant
-       ckinp = dot_product(cark(:), c(:))
-       ckinp = ckinp - bnorm
-       if (ckinp < -0.001) then
-          nbz = nbz  + 1
-       end if
-       if (ckinp > 0.001) then
-          ! outside the brillouin zone
-          ntz = 1
-          return
-       end if
-    end do
-    if (nbz == 7)  then
-       ! wehen all seven tests are fulfilled, then the rk lies inside the BZ 
-       ntz = -1
-       return
-    else
-       ! rk lines on the border of the Brillouin zone 
+
+    if (on_boundary) then
        ntz = 0
-       return
+    else
+       ntz = -1
     end if
   end subroutine sym_bztest
 end module bztest

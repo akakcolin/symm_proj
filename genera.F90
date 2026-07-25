@@ -89,13 +89,18 @@ contains
 
      
   ! The inverse of group element I is calcualted and stored in inel(I)
-  subroutine sym_inverse(inel, G, multab)
+  subroutine sym_inverse(inel, G, multab, verbosity)
     integer, intent(out) :: inel(:)
 
     integer, intent(in) :: G
     integer, intent(in) :: multab(:,:)
+    integer, intent(in), optional :: verbosity
 
     integer :: I, J, II
+    integer :: out_level
+
+    out_level = 0
+    if (present(verbosity)) out_level = max(0, verbosity)
     inel(:) = 0
     do I = 1, G
        if (inel(I) == 0) then
@@ -108,14 +113,16 @@ contains
           end do
        end if
     end do
-    write(*,*)
-    write(*,*) "=========================================="
-    write(*,*) "Inverse Elements"
-    write(*,*) "=========================================="
-    write(*,*) "Element -> Inverse:"
-    do I = 1, G, 12
-       write(*,'(12I6)') inel(I:min(I+11, G))
-    end do
+    if (out_level >= 1) then
+       write(*,*)
+       write(*,*) "=========================================="
+       write(*,*) "Inverse Elements"
+       write(*,*) "=========================================="
+       write(*,*) "Element -> Inverse:"
+       do I = 1, G, 12
+          write(*,'(12I6)') inel(I:min(I+11, G))
+       end do
+    end if
 
     do I = 1, G
        if(inel(I) ==  0) then

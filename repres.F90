@@ -65,7 +65,7 @@ contains
     complex(dp), allocatable :: dfi(:,:)
 
     complex(dp), allocatable :: grupel(:,:,:)
-    real(dp), allocatable :: genfi(:,:)
+    complex(dp), allocatable :: genfi(:,:)
     real(dp), allocatable :: grupelord2(:,:), subm(:,:,:)
     real(dp), allocatable :: grupelord4(:,:,:,:)
 
@@ -80,7 +80,8 @@ contains
     integer :: N, N6, N8
     integer :: K1, K11, K2, K3, K4, K5, K6, K7, KJ
     integer :: IND
-    integer :: RIN, RINAB
+    complex(dp) :: RIN
+    real(dp) :: RINAB
     integer :: ML1, ML2, LJ1, ncl1, nip, NML, numl, nopil
     
     complex(dp) :: pi2i
@@ -201,7 +202,7 @@ contains
                    do K5 = 1, G
                       K6 = inel(K5)
                       k6 = multab(K4, K6)
-                      K6 = cind(K6)
+                      K6 = cind(k6)
                       vec2(K4) = vec2(K4) + conjg(ch(J, K6))*vec(K5)
                    end do
                 end do
@@ -237,17 +238,13 @@ contains
                          vec(1:G) = fi(multab(I3, 1:G),1)
 
                          do K11 = 1, IV
-                            RIN = 0
-                            RIN = dot_product(vec(1:G), conjg(fi(1:G, K11)))
-
-                            !RIN = vec(1:G)*conj(fi(1:G, K11))
+                            RIN = dot_product(fi(1:G, K11), vec(1:G))
                             RINAB = abs(RIN)
 
                             if (RINAB >= tol_zero) then
                                if (abs(RINAB -1) >= tol_orthog) then
                                   vec(1:G) = vec(1:G) - RIN*fi(1:G, K11)
-                                  rnorm = dot_product(vec(1:G), vec(1:G))
-                                  !rnorm = sum(abs(vec(1:G))**2)
+                                  rnorm = sum(abs(vec(1:G))**2)
                                   if (rnorm >= tol_zero) then
                                      rnorm = 1/sqrt(rnorm)
                                   else
@@ -297,9 +294,6 @@ contains
              do II = 1, LJ1
                 grupel(II, II, 1) = 1
              end do
-             do II = 1, LJ1
-                write(*,*) grupel(II, 1:LJ1, 1)
-             end do
 
              do K1 = 2, nmberg
                 K5 = ngen(K1)
@@ -310,10 +304,6 @@ contains
                 end do
 
                 grupel(1:LJ1, 1:LJ1, K5) = matmul(dfi(1:LJ1, 1:G), genfi(1:G, 1:LJ1))
-
-                do II = 1, LJ1
-                   write(*,*) grupel(II, 1:LJ1, K5)
-                end do
 
              end do
 
@@ -327,6 +317,7 @@ contains
                    ! the representatives of the generators
                 end if
              end do
+
              if (steer(9) .ne. 0) then !steer(9)
                 do I3 = 1, G
                    do I4 = 1, LJ1
@@ -348,18 +339,19 @@ contains
           end if
        else
 
-          if(steer(8) .ne. 0) then ! steer(8) 
-             do II = 1, G
-                grupelord2(1, II) = real(ch(J, cind(II)))
-                grupelord2(2, II) = aimag(ch(J, cind(II)))
-             end do
+          ! 1D irreps: the "irrep matrix" is just the character (a complex number).
+          ! Always set grupel from the character table; steer(8) only controls debug output.
+          do II = 1, G
+             grupelord2(1, II) = real(ch(J, cind(II)))
+             grupelord2(2, II) = aimag(ch(J, cind(II)))
+          end do
+          do II = 1, G
+             grupel(1, 1, II) = cmplx(grupelord2(1, II), grupelord2(2, II))
+          end do
+          if(steer(8) .ne. 0) then ! steer(8)
              do I3 = 1, G
                 write(*,*) "Representation number ", KJ, " element number ", I3
                 write(*,*) "(", grupelord2(1,I3), " ", grupelord2(2,I3), ")"
-             end do
-
-             do II = 1, G
-                grupel(1, 1, II) = cmplx(grupelord2(1, II), grupelord2(2, II))
              end do
           end if
        end if

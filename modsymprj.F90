@@ -263,7 +263,7 @@ contains
 
     allocate(gel(order))
 
-    gel(1:order) = nge(first:(first+order-1))
+    gel(1:order) = nge2(first:(first+order-1))
 
     npri(:) = primen(:)
 
@@ -469,7 +469,7 @@ contains
              cind_invp(I) = I
           end do
           ! section 6.2
-          call sym_irrep(jpdd, allow, ncl, laj, cind_invp, kgord, mtab2, npri, steer, &
+          call sym_irrep(jpdd, allow, ncl, laj, kgord, mtab2, npri, steer, &
                & ibz, ksym, nopi1, nopli1, sil)
 
           allocate(nalr(ncl)) 

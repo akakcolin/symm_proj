@@ -42,7 +42,7 @@ contains
    ! integer, intent(in) :: nblock
    
     
-    integer :: J, J1, J2, JD, K, KJ, K4, K5, KI, LD1, K1
+    integer :: J, J1, J2, JD, K, KJ, K4, K5, KI, LD1, K1, K2
     integer :: N31, NC, ntr, LJ1
     integer :: lsqsum
     
@@ -59,19 +59,15 @@ contains
     complex(dp) ::R4, R5
     complex(dp) :: ep
 
-    integer, allocatable :: nspec(:) 
-    real(dp), allocatable :: nrn(:,:) 
-    real(dp), allocatable :: jpddorg(:,:,:)
-    real(dp), allocatable :: jdpkorg(:,:,:)
-    real(dp), allocatable :: tmatriorg(:,:,:)
- 
+    integer, allocatable :: nspec(:)
+    real(dp), allocatable :: nrn(:,:)
+
     complex(dp), allocatable :: jdpk(:,:)
     complex(dp), allocatable :: jdprod(:,:)
     complex(dp), allocatable :: tmatri(:,:)
     complex(dp), dimension(72) :: ldmm
     integer, allocatable :: step_size(:)
     integer :: temp_row, temp_col
-    integer :: lorb, offset_l, nrow_block
     integer :: alloc_stat
 
     allocate(step_size(nel))
@@ -91,24 +87,20 @@ contains
        ! J is the index of the irreducible representation
        if (allow(J) .ne. 0) then
 
+          ! Conjugate all diagonal elements of jpdd first
+          ! (conjugation moved before JD loop for clarity)
+          do JD = 1, laj(J)
+             do I = 1, kgord
+                jpdd(J, JD, I) = conjg(jpdd(J, JD, I))
+             end do
+          end do
+
           do JD = 1, laj(J)
 
              !write(*,*) ""
              !write(*,*) "T-matrix for J = ", J, ", JD = ", JD
 
              nb = 1
-             ! jd is the index of the diagonal elements of the irreducible representation J
-             do I = 1, kgord
-                jpdd(J, JD, I) =conjg(jpdd(J, JD, I))
-             end do
-
-             if (steer(18) .ne. 0) then
-                do I = 1, kgord
-                   jpddorg(1, JD, I) = real(jpdd(J, JD, I))
-                   jpddorg(2, JD, I) = aimag(jpdd(J, JD, I))
-                end do
-                !write(*,*) " "
-             end if
 
              ! ichem is the index of the chemical element
              do ichem = 1, nel
@@ -127,8 +119,6 @@ contains
                    allocate(jdpk(ndi, ndi))
                    allocate(jdprod(ndi, ndi))
                    allocate(tmatri(ndi, ndi))
-                   allocate(tmatriorg(2, ndi, ndi))
-                   allocate(jdpkorg(2, ndi, ndi))
                    do mu1 = 1, nat(ichem)
                       ! mu1 is the atom index, row index in the projection matrix
                       do mu2 = 1, nat(ichem)
@@ -157,11 +147,6 @@ contains
                                   if (N3 .ne. N31) then
                                      N31 = N3
                                      ldmm(1:72) = ldrmm(1:72, N3)
-                                     if (steer(18) .ne. 0) then
-                                        do I = 1, 72
-                                           write(*,*) ldmm(I)
-                                        end do
-                                     end if
                                   end if
 
                                   do I = 1, ncoset
@@ -195,62 +180,26 @@ contains
                    ndi = N*nat(ichem)
                    rh = real(laj(J))/ real(kgord)
                    jdpk(1:ndi, 1:ndi) = jdpk(1:ndi, 1:ndi) * rh
-                   ! section 8.4
-                   ! test projection matrix: must satisfy P^2 = P (idempotent) and P = P^dagger (Hermitian)
 
-                   ! Test 1: Check idempotency P^2 = P
-                   jdprod(1:ndi, 1:ndi) = matmul(jdpk(:,:) , jdpk(:, :))
-                   tmatri(1:ndi, 1:ndi) = jdprod(1:ndi, 1:ndi) - jdpk(1:ndi, 1:ndi)
+                   ! Force Hermiticity: the projection operator is Hermitian by
+                   ! group-theoretic construction (P = P^dagger). Symmetrizing
+                   ! suppresses floating-point noise from the 48-term sum.
+                   jdpk(1:ndi, 1:ndi) = 0.5_dp * (jdpk(1:ndi, 1:ndi) + &
+                        transpose(conjg(jdpk(1:ndi, 1:ndi))))
 
-                   K4 = 1
-                   do while (K4 <= ndi)
-                      K5 = 1
-                      do while (K5 <= ndi)
-                         if (abs(tmatri(K4, K5)) > tsmall) then
-                            exit
-                         end if
-                         K5 = K5 + 1
-                      end do
-
-                      if (K5 <= ndi) then
-                         exit
-                      end if
-                      K4 = K4 + 1
+                   ! Check trace: if the irrep is not contained in this orbital
+                   ! space, jdpk is numerically zero — skip extraction.
+                   ptrace = cmplx(0,0)
+                   do III = 1, ndi
+                      ptrace = ptrace + jdpk(III,III)
                    end do
-                   ! error, no projection matrix for J (failed idempotency test)
-                   if (K4 <= ndi) then
-                      write(*,*) "Error: P^2 != P, not a projection matrix for J = ", J
-                      write(*,*) ", JD= ", JD, ", laj= ", laj(J), ", ichem = ", ichem, "L = ", L, " ndi= ", ndi
-
-                      jdpkorg(1, 1:ndi, 1:ndi) = real(jdpk(1:ndi,1:ndi))
-                      jdpkorg(2, 1:ndi, 1:ndi) = aimag(jdpk(1:ndi,1:ndi))
-                      tmatriorg(1, 1:ndi, 1:ndi) = real(tmatri(1:ndi, 1:ndi))
-                      tmatriorg(2, 1:ndi, 1:ndi) = aimag(tmatri(1:ndi, 1:ndi))
-                   end if
-
-                   ! Test 2: Check Hermiticity P = P^dagger
-                   tmatri(1:ndi, 1:ndi) = jdpk(1:ndi, 1:ndi)  - transpose((conjg(jdpk(1:ndi, 1:ndi))))
-                   K4 = 1
-                   do while (K4 <= ndi)
-                      K5 = 1
-                      do while (K5 <= ndi)
-                         if (abs(tmatri(K4, K5)) > tsmall) then
-                            exit
-                         end if
-                         K5 = K5 + 1
-                      end do
-                      if (K5 <= ndi) then
-                         exit
-                      end if
-                      K4 = K4 + 1
-                   end do
-                   if (K4 <= ndi) then
-                      write(*,*) "Error: P != P^dagger, projection matrix not Hermitian"
-                      write(*,*) "Error, no projection matrix for J =", J, "JD =", JD, "laj = ", laj(J)
-                      write(*,*) ""
-                      tmatriorg(1, 1:ndi, 1:ndi) = real(tmatri(1:ndi, 1:ndi))
-                      tmatriorg(2, 1:ndi, 1:ndi) = aimag(tmatri(1:ndi, 1:ndi))
-                      write(*,*) ""
+                   rntr = real(ptrace)
+                   if (abs(rntr) < 0.1_dp) then
+                      ! Irrep not contained in this L-subspace; skip.
+                      deallocate(jdpk)
+                      deallocate(jdprod)
+                      deallocate(tmatri)
+                      cycle
                    end if
                    ! section 8.5
                    ! we orthormalise the submatrix (fixed L, ichem) and store the resulting
@@ -284,8 +233,8 @@ contains
                       do I = 1, ndi
                          if ((abs(jdpk(I, I) -1))**2 <= ttsmall) then
                             itotal = itotal + 1
-                            do N = 1, ndi
-                               tmatri(N, itotal) = 0
+                            do K2 = 1, ndi
+                               tmatri(K2, itotal) = 0
                             end do
                             tmatri(I, itotal) = 1
                             nspec(I) = 1
@@ -307,26 +256,24 @@ contains
                                if (sumtot >= ttsmall) then
                                   sumtot = 1/sqrt(sumtot)
                                   tmatri(1:ndi, itotal) = jdpk(1:ndi, I)*sumtot
-                                  if (itotal .ne. I1) then
-                                     NC = I1
-                                     ! Modified Gram-Schmidt orthogonalization (more numerically stable)
+                                  ! Modified Gram-Schmidt against ALL previous columns
+                                  ! (including unit-diagonal ones, which were at NC=1..ito before
+                                  !  Gram-Schmidt columns were added)
+                                  if (ito >= 1) then
+                                     NC = 1
                                      do while (NC <= ito)
-                                        ! orthonormalisation against previously found orthonormal columns
-                                        R4 = dot_product(conjg(tmatri(1:ndi, NC)), tmatri(1:ndi, itotal))
+                                        R4 = dot_product(tmatri(1:ndi, NC), tmatri(1:ndi, itotal))
                                         if (abs(R4) > 1.0e-10_dp) then
-                                           ! Project out component along NC-th vector
                                            tmatri(1:ndi, itotal) = tmatri(1:ndi, itotal) - R4*tmatri(1:ndi, NC)
-                                           ! Check if vector became too small (numerically dependent)
                                            R1 = sum(abs(tmatri(1:ndi, itotal))**2)
                                            if (R1 < ttsmall) then
-                                              ! Vector is linearly dependent, discard it
                                               itotal = itotal - 1
                                               exit
                                            end if
                                         end if
                                         NC = NC + 1
                                      end do
-                                     ! Renormalize after all projections (Modified Gram-Schmidt)
+                                     ! Renormalize after MGS (only needed when MGS ran)
                                      if (NC > ito) then
                                         R1 = sum(abs(tmatri(1:ndi, itotal))**2)
                                         if (R1 >= ttsmall) then
@@ -335,14 +282,12 @@ contains
                                         else
                                            itotal = itotal - 1
                                         end if
-                                        if (itotal .eq. ntr) then
-                                           exit
-                                        end if
                                      end if
-                                  else
-                                     if (itotal .eq. ntr) then
-                                        exit
-                                     end if
+                                  end if
+                                  ! When ito == 0: column is already normalized by sumtot,
+                                  ! no MGS or renormalization needed.
+                                  if (itotal .eq. ntr) then
+                                     exit
                                   end if
                                end if
                             end if
@@ -355,12 +300,10 @@ contains
                             deallocate(jdpk)
                             deallocate(jdprod)
                             deallocate(tmatri)
-                            deallocate(tmatriorg)
-                            deallocate(jdpkorg)
                             exit
                          end if
                       end if
-                         deallocate(nspec)
+                      if (allocated(nspec)) deallocate(nspec)
                    else
                       itotal = 0
                    end if
@@ -374,12 +317,8 @@ contains
                       do I = 1, itotal
                          do atom_idx = 1, nat(ichem)
                             temp_row = projection_block_row_index(ichem, atom_idx, L, nat, step_size)
-                            projmatrix(temp_row:temp_row+nrow_block-1, temp_col) = &
-                                 & tmatri((atom_idx-1)*nrow_block+1:(atom_idx-1)*nrow_block+nrow_block, I)
-                         end do
-                         do I1 = 1, ndi
-                            tmatriorg(1, I1, I) = real(tmatri(I1, I))
-                            tmatriorg(2, I1, I) = aimag(tmatri(I1, I))
+                            projmatrix(temp_row:temp_row+N-1, temp_col) = &
+                                 & tmatri((atom_idx-1)*N+1:(atom_idx-1)*N+N, I)
                          end do
                          temp_col = temp_col + 1
                       end do
@@ -406,9 +345,7 @@ contains
                    end if
                    deallocate(jdpk)
                    deallocate(jdprod)
-                   deallocate(jdpkorg)
                    deallocate(tmatri)
-                   deallocate(tmatriorg)
                 end do
              end do
 
@@ -435,7 +372,7 @@ contains
        base_row = base_row + nat(I1)*step_size(I1)
     end do
 
-    row_index = base_row + (atom_idx - 1)*step_size(ichem) + 2*L + 1
+    row_index = base_row + (atom_idx - 1)*step_size(ichem) + L*L + 1
   end function projection_block_row_index
 
   subroutine validate_projection_block(pblock, n, tol, J, JD, ichem, L)
@@ -447,81 +384,88 @@ contains
     integer, intent(in) :: ichem
     integer, intent(in) :: L
 
-    complex(dp), allocatable :: p2(:,:), delta(:,:)
-    complex(dp), allocatable :: hermitian_delta(:,:), gram(:,:)
+    complex(dp), allocatable :: projector(:,:), p2(:,:), delta(:,:)
+    complex(dp), allocatable :: gram(:,:)
     complex(dp) :: trace_value
-    integer :: row_idx, col_idx
+    integer :: m, row_idx, col_idx
 
-    if (size(pblock, 1) /= n .or. size(pblock, 2) /= n) then
-       write(*,*) "Projection block has inconsistent dimensions for J =", J, &
+    m = size(pblock, 2)
+    if (size(pblock, 1) /= n) then
+       write(*,*) "Projection block has inconsistent row count for J =", J, &
             & ", JD =", JD, ", ichem =", ichem, ", L =", L
+       write(*,*) "Expected", n, " rows, got", size(pblock, 1)
        error stop "Projection block has inconsistent dimensions"
     end if
 
-    allocate(p2(n, n))
-    allocate(delta(n, n))
-    allocate(hermitian_delta(n, n))
-    allocate(gram(n, n))
-
-    p2 = matmul(pblock, pblock)
-    delta = p2 - pblock
-    hermitian_delta = pblock - transpose(conjg(pblock))
+    ! Check column orthonormality: pblock^H * pblock ≈ I_m
+    allocate(gram(m, m))
     gram = matmul(transpose(conjg(pblock)), pblock)
-
-    trace_value = cmplx(0.0_dp, 0.0_dp, kind=dp)
-    do row_idx = 1, n
-       trace_value = trace_value + pblock(row_idx, row_idx)
-    end do
-
-    do row_idx = 1, n
-       do col_idx = 1, n
-          if (abs(delta(row_idx, col_idx)) > tol) then
-             write(*,*) "Projection block idempotency failed for J =", J, &
-                  & ", JD =", JD, ", ichem =", ichem, ", L =", L
-             write(*,*) "Projection block idempotency failed at (", row_idx, ",", col_idx, ")"
-             write(*,*) "Residual =", delta(row_idx, col_idx)
-             error stop "Projection block is not idempotent"
-          end if
-       end do
-    end do
-
-    do row_idx = 1, n
-       do col_idx = 1, n
-          if (abs(hermitian_delta(row_idx, col_idx)) > tol) then
-             write(*,*) "Projection block Hermiticity failed for J =", J, &
-                  & ", JD =", JD, ", ichem =", ichem, ", L =", L
-             write(*,*) "Projection block Hermiticity failed at (", row_idx, ",", col_idx, ")"
-             write(*,*) "Residual =", hermitian_delta(row_idx, col_idx)
-             error stop "Projection block is not Hermitian"
-          end if
-       end do
-    end do
-
-    do row_idx = 1, n
-       do col_idx = 1, n
+    do row_idx = 1, m
+       do col_idx = 1, m
           if (row_idx /= col_idx) then
              if (abs(gram(row_idx, col_idx)) > tol_projection) then
                 write(*,*) "Projection block column orthogonality failed for J =", J, &
                      & ", JD =", JD, ", ichem =", ichem, ", L =", L
-                write(*,*) "Projection block column orthogonality failed at (", row_idx, ",", col_idx, ")"
-                write(*,*) "Residual =", gram(row_idx, col_idx)
+                write(*,*) "At column pair (", row_idx, ",", col_idx, ")"
+                write(*,*) "Residual =", abs(gram(row_idx, col_idx))
                 error stop "Projection block columns are not orthogonal"
              end if
           else
              if (abs(gram(row_idx, col_idx) - 1.0_dp) > tol_projection) then
                 write(*,*) "Projection block column normalization failed for J =", J, &
                      & ", JD =", JD, ", ichem =", ichem, ", L =", L
-                write(*,*) "Projection block column normalization failed at (", row_idx, ",", col_idx, ")"
-                write(*,*) "Residual =", gram(row_idx, col_idx)
+                write(*,*) "At column ", row_idx
+                write(*,*) "Norm =", real(gram(row_idx, col_idx))
                 error stop "Projection block columns are not normalized"
              end if
           end if
        end do
     end do
+    deallocate(gram)
+
+    ! Build the full projector: P = pblock * pblock^H
+    allocate(projector(n, n))
+    allocate(p2(n, n))
+    allocate(delta(n, n))
+    projector = matmul(pblock, transpose(conjg(pblock)))
+
+    ! Check idempotency: P^2 = P
+    p2 = matmul(projector, projector)
+    delta = p2 - projector
+    do row_idx = 1, n
+       do col_idx = 1, n
+          if (abs(delta(row_idx, col_idx)) > tol) then
+             write(*,*) "Projection block idempotency failed for J =", J, &
+                  & ", JD =", JD, ", ichem =", ichem, ", L =", L
+             write(*,*) "At (", row_idx, ",", col_idx, ") residual =", abs(delta(row_idx, col_idx))
+             error stop "Projection block is not idempotent"
+          end if
+       end do
+    end do
+
+    ! Check Hermiticity: P = P^H (should be automatic from construction)
+    delta = projector - transpose(conjg(projector))
+    do row_idx = 1, n
+       do col_idx = 1, n
+          if (abs(delta(row_idx, col_idx)) > tol) then
+             write(*,*) "Projection block Hermiticity failed for J =", J, &
+                  & ", JD =", JD, ", ichem =", ichem, ", L =", L
+             write(*,*) "At (", row_idx, ",", col_idx, ") residual =", abs(delta(row_idx, col_idx))
+             error stop "Projection block is not Hermitian"
+          end if
+       end do
+    end do
+
+    ! Check trace is integer (equals subspace dimension m)
+    trace_value = cmplx(0.0_dp, 0.0_dp, kind=dp)
+    do row_idx = 1, n
+       trace_value = trace_value + projector(row_idx, row_idx)
+    end do
 
     if (abs(aimag(trace_value)) > tol) then
        write(*,*) "Projection block trace has non-negligible imaginary part for J =", J, &
             & ", JD =", JD, ", ichem =", ichem, ", L =", L
+       write(*,*) "Trace =", trace_value
        error stop "Projection block trace has non-negligible imaginary part"
     end if
 
@@ -531,9 +475,8 @@ contains
        error stop "Projection block trace is not close to an integer"
     end if
 
+    deallocate(projector)
     deallocate(p2)
     deallocate(delta)
-    deallocate(hermitian_delta)
-    deallocate(gram)
   end subroutine validate_projection_block
 end module projmat

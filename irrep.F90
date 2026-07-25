@@ -13,14 +13,13 @@ module irrep
 
 contains
   
-  subroutine sym_irrep(jpdd, allow, ncl, laj, cind_invp, &
+  subroutine sym_irrep(jpdd, allow, ncl, laj, &
        & G , mtab2, prime,steer, ibz, ksym, nopi1, nopli1, sil)
     complex(dp), intent(out) :: jpdd(:,:,:)
     integer, intent(out) :: allow(:)
     integer, intent(out) :: ncl
     integer, intent(out) :: laj(:)
-    integer, intent(out) :: cind_invp(:)
-    
+
     integer, intent(inout) :: steer(:)    
     integer, intent(in) :: G
     integer, intent(in) :: mtab2(:,:)
@@ -71,8 +70,8 @@ contains
        end if
     end do
 
-    if(steer(11) .ne. 0) then
-       ! if steer(11) is true, the multiplication table will be printed, row by row
+    if((steer(11) .ne. 0) .and. (steer(12) .ne. 0)) then
+       ! steer(11) is the validity flag; steer(12) controls table diagnostics.
        write(*,*)
        write(*,*) "=========================================="
        write(*,*) "Group Multiplication Table"
@@ -88,7 +87,7 @@ contains
        end do
     end if
     ! The inverse group elements are calculted and stored in inel(J)
-    call sym_inverse(inel, G, mtab2)
+    call sym_inverse(inel, G, mtab2, verbosity=steer(12))
     ! a set of group element generators are calculated
     call sym_genera(map, nmberg, ngen, G, mtab2)
 
@@ -114,7 +113,7 @@ contains
     ch(:,:)=0
 
     ! the irreducible group characters are caluculated
-    call sym_charac(ch, cind, onert, sirt, lj, norder, cind_invp, mtab2, G, ncl, &
+    call sym_charac(ch, cind, onert, sirt, lj, norder, mtab2, G, ncl, &
          & h, nfirst, classl, inel, steer, prime)
 
     ! the irreducible representation of the group elements are calculated
@@ -135,7 +134,7 @@ contains
     deallocate(onert)
     deallocate(sirt)
     deallocate(cind)
-    write(*,*) "Irrep has finished executing"
+    if (steer(12) .ne. 0) write(*,*) "Irrep has finished executing"
     
   end subroutine sym_irrep
   

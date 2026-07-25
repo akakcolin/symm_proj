@@ -113,6 +113,9 @@ contains
 
     if ((point_group_number >= 16) .and. (point_group_number <= 31)) then
        offset = pg_parent_d6h
+    else if (point_group_number == 2) then
+       ! Ci: uses D6h parent where element 13 is pure inversion
+       offset = pg_parent_d6h
     else
        offset = pg_parent_oh
     end if
