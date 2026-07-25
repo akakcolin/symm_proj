@@ -137,6 +137,7 @@ contains
     real(dp), allocatable :: positions_work(:,:)
     integer, allocatable :: nat_work(:)
     real(dp) :: lattice_work(3,3)
+    real(dp) :: lattice_volume, lattice_scale
 
     error_code = 0
 
@@ -199,6 +200,17 @@ contains
     if (size(crystal%pos_frac, 3) < maxval(crystal%nat(1:crystal%nel))) then
        write(*,*) "sympw_init: pos_frac atom dimension is smaller than max(nat)"
        error_code = 12
+       return
+    end if
+
+    lattice_scale = sqrt(sum(crystal%lattice(1, :)**2)) * &
+         sqrt(sum(crystal%lattice(2, :)**2)) * &
+         sqrt(sum(crystal%lattice(3, :)**2))
+    lattice_volume = abs(determinant3(crystal%lattice))
+    if (lattice_scale <= tol_equal .or. &
+         lattice_volume <= tol_lattice_integer * lattice_scale) then
+       write(*,*) "sympw_init: lattice vectors are singular or nearly singular"
+       error_code = 13
        return
     end if
 
@@ -567,6 +579,14 @@ contains
     library_initialized = .false.
   end subroutine sympw_finalize
 
+
+  real(dp) function determinant3(mat)
+    real(dp), intent(in) :: mat(3,3)
+
+    determinant3 = mat(1,1) * (mat(2,2) * mat(3,3) - mat(2,3) * mat(3,2)) - &
+         mat(1,2) * (mat(2,1) * mat(3,3) - mat(2,3) * mat(3,1)) + &
+         mat(1,3) * (mat(2,1) * mat(3,2) - mat(2,2) * mat(3,1))
+  end function determinant3
 
   ! ============================================
   ! Map verbosity to legacy steer flags without changing their semantics.

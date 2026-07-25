@@ -13,6 +13,7 @@
 !   Scenario 9: Oh (36), L-point,      8 atoms, lmax=2  (Si diamond conventional cell reduction)
 !   Scenario 10: Oh(36), X-point,      2 atoms, lmax=2  (Si diamond nonsymmorphic irrep filter)
 !   Scenario 11: Oh(36), X-point,      8 atoms, lmax=2  (conventional-cell k transform)
+!   Scenario 12: invalid crystal metadata returns explicit error codes
 !
 ! Each scenario verifies:
 !   (1) matrix_order matches the expected basis size
@@ -36,11 +37,13 @@ program test_lib
   integer, parameter :: cell_info_checks = 3
   integer, parameter :: kpoint_info_checks = 8
   integer, parameter :: kpoint_basis_checks = 2
+  integer, parameter :: invalid_input_checks = 3
   integer, parameter :: scenario9_checks = checks_per_scenario + cell_info_checks + kpoint_info_checks
   integer, parameter :: scenario10_checks = checks_per_scenario + kpoint_info_checks
   integer, parameter :: scenario11_checks = checks_per_scenario + cell_info_checks + &
        kpoint_info_checks + kpoint_basis_checks
-  integer, parameter :: expected_scenarios = 11
+  integer, parameter :: scenario12_checks = invalid_input_checks
+  integer, parameter :: expected_scenarios = 12
   integer :: error_code, passed, total, scenario_passed, scenarios_ok, expected_order
   real(dp) :: expected_transform(3,3), expected_kpoint(3)
 
@@ -335,6 +338,40 @@ program test_lib
   write(*,'(A,I2,A)') "  Scenario 11: ", scenario_passed, "/20 checks passed"
 
   ! ==========================================
+  ! Scenario 12: invalid crystal metadata
+  ! ==========================================
+  write(*,*)
+  write(*,*) "--- Scenario 12: invalid crystal metadata ---"
+  scenario_passed = 0
+
+  call setup_minimal_crystal_header(crystal)
+  call sympw_init(crystal, error_code)
+  call check_error_code("missing nat", error_code, 3, scenario_passed, total)
+  call teardown_crystal(crystal)
+
+  call setup_minimal_crystal_header(crystal)
+  allocate(crystal%nat(1), crystal%lmax(1), crystal%pos_frac(3, 1, 1))
+  crystal%nat(1) = 0
+  crystal%lmax(1) = 0
+  crystal%pos_frac(:, :, :) = 0.0_dp
+  call sympw_init(crystal, error_code)
+  call check_error_code("zero atom count", error_code, 7, scenario_passed, total)
+  call teardown_crystal(crystal)
+
+  call setup_minimal_crystal_header(crystal)
+  allocate(crystal%nat(1), crystal%lmax(1), crystal%pos_frac(2, 1, 1))
+  crystal%nat(1) = 1
+  crystal%lmax(1) = 0
+  crystal%pos_frac(:, :, :) = 0.0_dp
+  call sympw_init(crystal, error_code)
+  call check_error_code("bad position shape", error_code, 10, scenario_passed, total)
+  call teardown_crystal(crystal)
+
+  passed = passed + scenario_passed
+  if (scenario_passed == scenario12_checks) scenarios_ok = scenarios_ok + 1
+  write(*,'(A,I2,A)') "  Scenario 12: ", scenario_passed, "/3 checks passed"
+
+  ! ==========================================
   ! Summary
   ! ==========================================
   write(*,*)
@@ -353,6 +390,16 @@ program test_lib
 contains
 
   ! ----- Setup helpers -----
+
+  subroutine setup_minimal_crystal_header(c)
+    type(sympw_crystal_t), intent(out) :: c
+    c%lattice(:, :) = 0.0_dp
+    c%lattice(1, 1) = 1.0_dp
+    c%lattice(2, 2) = 1.0_dp
+    c%lattice(3, 3) = 1.0_dp
+    c%nel = 1
+    c%pgnr = 36
+  end subroutine setup_minimal_crystal_header
 
   subroutine setup_cubic_1atom(c, lmax_val, pgnr_val)
     type(sympw_crystal_t), intent(out) :: c
@@ -454,10 +501,25 @@ contains
 
   subroutine teardown_crystal(c)
     type(sympw_crystal_t), intent(inout) :: c
-    deallocate(c%nat, c%lmax, c%pos_frac)
+    if (allocated(c%nat)) deallocate(c%nat)
+    if (allocated(c%lmax)) deallocate(c%lmax)
+    if (allocated(c%pos_frac)) deallocate(c%pos_frac)
   end subroutine teardown_crystal
 
   ! ----- Verification -----
+
+  subroutine check_error_code(label, actual, expected, sp, tot)
+    character(len=*), intent(in) :: label
+    integer, intent(in) :: actual, expected
+    integer, intent(inout) :: sp, tot
+    logical :: ok
+
+    ok = (actual == expected)
+    tot = tot + 1
+    write(*,'(A,A,A,I3,A,I3,A,A)') "  ", trim(label), " error_code:", &
+         actual, " (expected", expected, ")", merge(" PASS", " FAIL", ok)
+    if (ok) sp = sp + 1
+  end subroutine check_error_code
 
   subroutine check_cell_info(expected_reduced, expected_nat, expected_transform, sp, tot)
     logical, intent(in) :: expected_reduced
