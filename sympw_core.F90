@@ -11,6 +11,7 @@
 module sympw_core
   use accuracy
   use constants
+  use sympw_group_mode, only: projective_factor_group_active
   use groupkp
   use irrep
   use sumsets
@@ -19,6 +20,7 @@ module sympw_core
   private
 
   public :: sympw_compute_kpoint
+  public :: sympw_form_projector
 
 contains
 
@@ -55,7 +57,7 @@ contains
   !   verbosity   - optional output level: 0 quiet, 1 summary, 2 details, 3 tables
   !
   ! Output:
-  !   projmatrix_out - projection matrix (matrixorder, matrixorder)
+  !   projmatrix_out - legacy output containing the symmetry-adapted basis T
   !   matrixorder    - total basis function dimension
   !   success        - .true. if computation completed
   ! Optional output metadata:
@@ -65,13 +67,17 @@ contains
   !   n_classes, n_irreps      - conjugacy-class count and irrep count
   !   n_allowed_irreps         - irreps passing the Bloch-phase allow filter
   !   *_dimension_sum          - sums over represented/allowed irrep dimensions
+  !   allowed_irrep_*_out      - allowed irrep indices, dimensions, and T-column ranges
 
   subroutine sympw_compute_kpoint(rk, a, ai, b, bi, nel, nat, lmax, order, r, u, &
        pgnr, rgr3, ldrmm, mtab, gel, steer, npri, tsmall, ttsmall, &
        ikp, matrixorder, projmatrix_out, success, verbosity, &
        little_group_order, factor_group_order, factor_group_used, &
        n_classes, n_irreps, n_allowed_irreps, &
-       irrep_dimension_sum, allowed_irrep_dimension_sum)
+       irrep_dimension_sum, allowed_irrep_dimension_sum, projector_out, &
+       allowed_irrep_indices_out, allowed_irrep_dimensions_out, &
+       allowed_irrep_column_start_out, allowed_irrep_column_end_out, &
+       allowed_irrep_characters_out)
     real(dp), intent(in) :: rk(3)
     real(dp), intent(in) :: a(3,3), ai(3,3), b(3,3), bi(3,3)
     integer, intent(in) :: nel
@@ -101,6 +107,12 @@ contains
     integer, intent(out), optional :: n_allowed_irreps
     integer, intent(out), optional :: irrep_dimension_sum
     integer, intent(out), optional :: allowed_irrep_dimension_sum
+    complex(dp), allocatable, intent(out), optional :: projector_out(:,:)
+    integer, allocatable, intent(out), optional :: allowed_irrep_indices_out(:)
+    integer, allocatable, intent(out), optional :: allowed_irrep_dimensions_out(:)
+    integer, allocatable, intent(out), optional :: allowed_irrep_column_start_out(:)
+    integer, allocatable, intent(out), optional :: allowed_irrep_column_end_out(:)
+    complex(dp), allocatable, intent(out), optional :: allowed_irrep_characters_out(:,:)
 
     ! Local variables - operator-ID-indexed rotation matrices
     real(dp), allocatable :: rgr(:,:,:)
@@ -127,16 +139,20 @@ contains
     integer, allocatable :: npl(:,:,:,:)
     integer :: nal, nblock, nup, nip, nallowed, ichem, L, N
     integer, allocatable :: nalr(:)
+    integer, allocatable :: irrep_column_start_all(:), irrep_column_end_all(:)
 
     ! Other locals
     real(dp) :: ark(3), srk(3), rk_phase(3)
     integer :: I, J, K, K1, K2
+    integer :: allowed_position, column_count, covered_columns, metadata_alloc_stat
+    complex(dp) :: character_value
     integer :: factor_capacity
-    logical :: is_ski
+    logical :: projective_mode
     integer, allocatable :: mtab2(:, :)
     integer :: out_level
     integer :: saved_steer(20)
-    logical :: override_verbosity, irrep_ok
+    logical :: factor_group_ok, mapping_ok, override_verbosity, irrep_ok, projection_ok
+    logical :: projector_ok, metadata_ok
 
     success = .false.
     if (present(little_group_order)) little_group_order = 0
@@ -150,14 +166,46 @@ contains
     out_level = 1
     override_verbosity = present(verbosity)
     if (override_verbosity) out_level = max(0, verbosity)
-    ark(1:3) = rk(1:3)
-    srk(1:3) = rk(1:3)
-    rk_phase(1:3) = rk(1:3) * 2*pi
+
+    if (nel < 1 .or. size(nat) < nel .or. size(lmax) < nel) then
+       write(*,*) "Invalid crystal metadata for k-point projection"
+       return
+    end if
+    if (pgnr < 1 .or. pgnr > 36) then
+       write(*,*) "Invalid point-group number for k-point projection:", pgnr
+       return
+    end if
+    if (any(lmax(1:nel) < 0) .or. any(lmax(1:nel) > maxL)) then
+       write(*,*) "K-point projection lmax must be in the range 0..", maxL
+       return
+    end if
+    if (order < 1 .or. order > 48) then
+       write(*,*) "Invalid point-group order for k-point projection:", order
+       return
+    end if
+    if (size(rk) < 3 .or. size(r, 1) < 3 .or. size(r, 2) < nel .or. &
+         size(r, 3) < maxval(nat(1:nel))) then
+       write(*,*) "Crystal position arrays are too small for k-point projection"
+       return
+    end if
+    if (size(mtab, 1) < order .or. size(mtab, 2) < order .or. size(gel) < order .or. &
+         size(steer) < 20 .or. size(npri) < 100) then
+       write(*,*) "Group workspace arrays are too small for k-point projection"
+       return
+    end if
+    call snap_fractional_kpoint(rk(1:3), ark(1:3))
+    srk(1:3) = ark(1:3)
+    rk_phase(1:3) = ark(1:3) * 2*pi
     IV = 1
     ibz = 1
     nopi1 = 1
     ksym = 1
-    factor_capacity = max(100, 4*order)
+    factor_group_ok = .true.
+    ! Crystallographic screw/glide translations can produce Bloch phases
+    ! of order up to 12 (for example a 6_1 screw at a zone boundary).
+    ! Keep the extension finite, but do not reject those valid cases solely
+    ! because the workspace was sized for a fourfold phase.
+    factor_capacity = max(100, max_projective_phase_order*order)
 
     ! Determine total basis dimension
     matrixorder = 0
@@ -233,8 +281,20 @@ contains
 
        call sym_groupkp(kg, kgord, k2gord, kgel, kkgel, mtab2, ibz, listp, &
             nopi, nopi1, nopli, nopli1, sil, til, ksym, rk_phase, ark, a, ai, b, bi, u, order, pgnr, &
-            rgr, mtab, gel, steer, tsmall)
+            rgr, mtab, gel, steer, tsmall, factor_group_ok)
        if (out_level >= 1) write(*,'(A,I3,A)') " Little group order: ", kg, " elements"
+    end if
+
+    if (.not. factor_group_ok) then
+       if (out_level >= 1) then
+          write(*,*) "Projective phases do not close within the supported finite factor group"
+          write(*,*) "Projection skipped for this k-point"
+       end if
+       if (present(little_group_order)) little_group_order = kg
+       if (present(factor_group_order)) factor_group_order = kg
+       deallocate(kgel, kkgel, sil, til)
+       deallocate(rgr, nopi, nopli1, nopli, listp, mtab2)
+       return
     end if
 
     if (out_level >= 1) then
@@ -248,11 +308,11 @@ contains
        end do
     end if
 
-    is_ski = ((steer(20) .ne. 0) .or. (ksym .ne. 0) .or. (ibz .ne. 0))
+    projective_mode = projective_factor_group_active(steer(20), ksym, ibz)
     if (present(little_group_order)) little_group_order = kg
     if (present(factor_group_order)) factor_group_order = kgord
-    if (present(factor_group_used)) factor_group_used = .not. is_ski
-    if (.not. is_ski) then
+    if (present(factor_group_used)) factor_group_used = projective_mode
+    if (projective_mode) then
        if (out_level >= 1) then
           write(*,'(A,I4,A)') " Factor group Gk/Tk active with ", kgord, " lifted elements"
        end if
@@ -267,8 +327,8 @@ contains
 
     if (out_level >= 1) write(*,*) "Computing irreducible representations of the little group..."
 
-    if ((IV <= 2) .or. is_ski) then
-       allocate(jpdd(kgord, kgord, kgord))
+    if ((IV <= 2) .or. .not. projective_mode) then
+       allocate(jpdd(kgord, maxdim, kgord))
        allocate(laj(kgord))
        allocate(allow(kgord))
        jpdd(:,:,:) = 0
@@ -352,17 +412,164 @@ contains
        nvec(:,:,:,:,:) = 0
        npl(:,:,:,:) = 0
 
-       call sym_sumsets(np, nvec, npl, til, kgord, kgel, rgr, listp, a, ai, b, r, u, nel, nat, ksym, ibz, steer)
+       call sym_sumsets(np, nvec, npl, til, kgord, kgel, rgr, listp, &
+            a, ai, b, r, u, nel, nat, ksym, ibz, steer, success=mapping_ok)
+       if (.not. mapping_ok) then
+          deallocate(laj, allow, jpdd, np, nvec, npl, nalr)
+          deallocate(kgel, kkgel, sil, til)
+          deallocate(rgr, nopi, nopli1, nopli, listp, mtab2)
+          return
+       end if
 
        allocate(projmatrix_out(matrixorder, matrixorder))
        projmatrix_out(:,:) = 0
 
+       allocate(irrep_column_start_all(ncl), irrep_column_end_all(ncl), &
+            stat=metadata_alloc_stat)
+       if (metadata_alloc_stat /= 0) then
+          deallocate(projmatrix_out)
+          deallocate(laj, allow, jpdd, np, nvec, npl, nalr)
+          deallocate(kgel, kkgel, sil, til)
+          deallocate(rgr, nopi, nopli1, nopli, listp, mtab2)
+          return
+       end if
+
        call sym_projmat(laj, kgord, allow, jpdd, projmatrix_out, nvec, nat, lmax, np, nel, ncl, npl, &
-            kgel, kkgel, listp, steer, ksym, ibz, pgnr, ldrmm, rk_phase, u, tsmall, ttsmall)
+            kgel, kkgel, listp, steer, ksym, ibz, pgnr, ldrmm, rk_phase, u, tsmall, ttsmall, &
+            projection_ok, irrep_column_start_all, irrep_column_end_all)
+
+       if (.not. projection_ok) then
+          deallocate(projmatrix_out, irrep_column_start_all, irrep_column_end_all)
+          deallocate(laj, allow, jpdd, np, nvec, npl, nalr)
+          deallocate(kgel, kkgel, sil, til)
+          deallocate(rgr, nopi, nopli1, nopli, listp, mtab2)
+          return
+       end if
+
+       metadata_ok = .true.
+       covered_columns = 0
+       do I = 1, ncl
+          if (allow(I) == 0) cycle
+          if (irrep_column_start_all(I) == 0 .and. irrep_column_end_all(I) == 0) cycle
+          column_count = irrep_column_end_all(I) - irrep_column_start_all(I) + 1
+          if (irrep_column_start_all(I) < 1 .or. &
+               irrep_column_end_all(I) > matrixorder .or. column_count < 1 .or. &
+               mod(column_count, laj(I)) /= 0) then
+             metadata_ok = .false.
+             exit
+          end if
+          covered_columns = covered_columns + column_count
+       end do
+       if (covered_columns /= matrixorder) metadata_ok = .false.
+       if (.not. metadata_ok) then
+          write(*,*) "Irrep column metadata is inconsistent with the symmetry basis"
+          deallocate(projmatrix_out, irrep_column_start_all, irrep_column_end_all)
+          deallocate(laj, allow, jpdd, np, nvec, npl, nalr)
+          deallocate(kgel, kkgel, sil, til)
+          deallocate(rgr, nopi, nopli1, nopli, listp, mtab2)
+          return
+       end if
+
+       if (present(allowed_irrep_indices_out)) then
+          allocate(allowed_irrep_indices_out(nallowed), stat=metadata_alloc_stat)
+          if (metadata_alloc_stat /= 0) metadata_ok = .false.
+       end if
+       if (present(allowed_irrep_dimensions_out)) then
+          allocate(allowed_irrep_dimensions_out(nallowed), stat=metadata_alloc_stat)
+          if (metadata_alloc_stat /= 0) metadata_ok = .false.
+       end if
+       if (present(allowed_irrep_column_start_out)) then
+          allocate(allowed_irrep_column_start_out(nallowed), stat=metadata_alloc_stat)
+          if (metadata_alloc_stat /= 0) metadata_ok = .false.
+       end if
+       if (present(allowed_irrep_column_end_out)) then
+          allocate(allowed_irrep_column_end_out(nallowed), stat=metadata_alloc_stat)
+          if (metadata_alloc_stat /= 0) metadata_ok = .false.
+       end if
+       if (present(allowed_irrep_characters_out)) then
+          allocate(allowed_irrep_characters_out(nallowed, kgord), stat=metadata_alloc_stat)
+          if (metadata_alloc_stat /= 0) metadata_ok = .false.
+       end if
+       if (.not. metadata_ok) then
+          if (present(allowed_irrep_indices_out)) then
+             if (allocated(allowed_irrep_indices_out)) deallocate(allowed_irrep_indices_out)
+          end if
+          if (present(allowed_irrep_dimensions_out)) then
+             if (allocated(allowed_irrep_dimensions_out)) deallocate(allowed_irrep_dimensions_out)
+          end if
+          if (present(allowed_irrep_column_start_out)) then
+             if (allocated(allowed_irrep_column_start_out)) deallocate(allowed_irrep_column_start_out)
+          end if
+          if (present(allowed_irrep_column_end_out)) then
+             if (allocated(allowed_irrep_column_end_out)) deallocate(allowed_irrep_column_end_out)
+          end if
+          if (present(allowed_irrep_characters_out)) then
+             if (allocated(allowed_irrep_characters_out)) deallocate(allowed_irrep_characters_out)
+          end if
+          deallocate(projmatrix_out, irrep_column_start_all, irrep_column_end_all)
+          deallocate(laj, allow, jpdd, np, nvec, npl, nalr)
+          deallocate(kgel, kkgel, sil, til)
+          deallocate(rgr, nopi, nopli1, nopli, listp, mtab2)
+          return
+       end if
+
+       allowed_position = 0
+       do I = 1, ncl
+          if (allow(I) == 0) cycle
+          allowed_position = allowed_position + 1
+          if (present(allowed_irrep_indices_out)) allowed_irrep_indices_out(allowed_position) = I
+          if (present(allowed_irrep_dimensions_out)) allowed_irrep_dimensions_out(allowed_position) = laj(I)
+          if (present(allowed_irrep_column_start_out)) then
+             allowed_irrep_column_start_out(allowed_position) = irrep_column_start_all(I)
+          end if
+          if (present(allowed_irrep_column_end_out)) then
+             allowed_irrep_column_end_out(allowed_position) = irrep_column_end_all(I)
+          end if
+          if (present(allowed_irrep_characters_out)) then
+             do K = 1, kgord
+                character_value = conjg(sum(jpdd(I, 1:laj(I), K)))
+                if (abs(real(character_value, dp)) < tol_character_cleanup) then
+                   character_value = cmplx(0.0_dp, aimag(character_value), dp)
+                end if
+                if (abs(aimag(character_value)) < tol_character_cleanup) then
+                   character_value = cmplx(real(character_value, dp), 0.0_dp, dp)
+                end if
+                allowed_irrep_characters_out(allowed_position, K) = character_value
+             end do
+          end if
+       end do
+
+       if (present(projector_out)) then
+          call sympw_form_projector(projmatrix_out, projector_out, projector_ok)
+          if (.not. projector_ok) then
+             if (allocated(projector_out)) deallocate(projector_out)
+             if (present(allowed_irrep_indices_out)) then
+                if (allocated(allowed_irrep_indices_out)) deallocate(allowed_irrep_indices_out)
+             end if
+             if (present(allowed_irrep_dimensions_out)) then
+                if (allocated(allowed_irrep_dimensions_out)) deallocate(allowed_irrep_dimensions_out)
+             end if
+             if (present(allowed_irrep_column_start_out)) then
+                if (allocated(allowed_irrep_column_start_out)) deallocate(allowed_irrep_column_start_out)
+             end if
+             if (present(allowed_irrep_column_end_out)) then
+                if (allocated(allowed_irrep_column_end_out)) deallocate(allowed_irrep_column_end_out)
+             end if
+             if (present(allowed_irrep_characters_out)) then
+                if (allocated(allowed_irrep_characters_out)) deallocate(allowed_irrep_characters_out)
+             end if
+             deallocate(projmatrix_out, irrep_column_start_all, irrep_column_end_all)
+             deallocate(laj, allow, jpdd, np, nvec, npl, nalr)
+             deallocate(kgel, kkgel, sil, til)
+             deallocate(rgr, nopi, nopli1, nopli, listp, mtab2)
+             return
+          end if
+       end if
 
        if (out_level >= 1) write(*,*) "Projection matrix construction complete."
        success = .true.
 
+       deallocate(irrep_column_start_all, irrep_column_end_all)
        deallocate(laj, allow, jpdd, np, nvec, npl, nalr)
     end if
 
@@ -370,5 +577,24 @@ contains
     deallocate(rgr, nopi, nopli1, nopli, listp, mtab2)
 
   end subroutine sympw_compute_kpoint
+
+
+  ! Form the projector P = T*T^H from one or more orthonormal basis columns.
+  subroutine sympw_form_projector(symmetry_basis, projector, success)
+    complex(dp), intent(in) :: symmetry_basis(:,:)
+    complex(dp), allocatable, intent(out) :: projector(:,:)
+    logical, intent(out) :: success
+
+    integer :: alloc_stat
+
+    success = .false.
+    if (size(symmetry_basis, 1) < 1 .or. size(symmetry_basis, 2) < 1 .or. &
+         size(symmetry_basis, 2) > size(symmetry_basis, 1)) return
+
+    allocate(projector(size(symmetry_basis, 1), size(symmetry_basis, 1)), stat=alloc_stat)
+    if (alloc_stat /= 0) return
+    projector = matmul(symmetry_basis, transpose(conjg(symmetry_basis)))
+    success = .true.
+  end subroutine sympw_form_projector
 
 end module sympw_core

@@ -222,7 +222,11 @@ contains
 
     do I = 1, 72
        res(1:3, 1:3) = matmul(Q1(1:3, 1:3), rcgr3(1:3, 1:3, I))
-       pg%rgr3(1:3, 1:3, I) = matmul(res(1:3, 1:3), Q(1:3, 1:3))
+       res(1:3, 1:3) = matmul(res(1:3, 1:3), Q(1:3, 1:3))
+       if (maxval(abs(aimag(res(1:3, 1:3)))) > tol_phase) then
+          error stop "Complex-to-real rotation transform has a nonzero imaginary part"
+       end if
+       pg%rgr3(1:3, 1:3, I) = real(res(1:3, 1:3), kind=dp)
     end do
 
     if (debug == 1) then
@@ -347,7 +351,7 @@ contains
        avec(:) = lattice(ivec, :)
        mapped(:) = matmul(rot, avec)
        coeff(:) = matmul(ai, mapped)
-       if (any(abs(coeff - nint(coeff)) > 1.0e-5_dp)) then
+       if (any(abs(coeff - nint(coeff)) > tol_structure_symmetry)) then
           ok = .false.
           return
        end if
@@ -407,7 +411,7 @@ contains
           do target_atom = 1, nat(ichem)
              target_frac(:) = matmul(ai, positions_cart(:, ichem, target_atom))
              diff_frac(:) = mapped_frac(:) - target_frac(:)
-             if (all(abs(diff_frac - nint(diff_frac)) < 1.0e-5_dp)) then
+             if (all(abs(diff_frac - nint(diff_frac)) < tol_structure_symmetry)) then
                 found = .true.
                 exit
              end if

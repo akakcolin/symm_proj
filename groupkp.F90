@@ -2,6 +2,7 @@ module groupkp
   use accuracy
   use constants
   use bztest 
+  use sympw_phase, only: bloch_phase
   implicit none
   private
   public :: sym_groupkp
@@ -10,7 +11,7 @@ contains
 
   subroutine sym_groupkp(kg, kgord, k2gord, kgel, kkgel, mtab2, ibz, listp, &
        & nopi, nopi1, nopli, nopli1, sil, til, ksym, rk, ark, a, ai, b,bi, u, order,pgnr, &
-       & rgr, mtab, gel, steer, tsmall)
+       & rgr, mtab, gel, steer, tsmall, factor_group_ok)
     integer, intent(inout) :: kg, kgord
     integer, intent(out) :: k2gord
     integer, intent(inout) :: kgel(:)
@@ -43,6 +44,7 @@ contains
     integer, intent(in) :: steer(:) ! steer(20)
 
     real(dp), intent(in) :: tsmall
+    logical, intent(out) :: factor_group_ok
 
     real(dp), dimension(3) :: srk
     integer :: II, K, I, J, K1, K2, I1
@@ -65,7 +67,8 @@ contains
     allocate(inverk(order))
     allocate(tmp_kgel(order))  ! Use actual group order instead of hardcoded 230
     inverk(:) = 0
-    membership_tol = max(tsmall, tol_lattice_integer)
+    factor_group_ok = .true.
+    membership_tol = max(tsmall, tol_kpoint_membership)
     ! section 2.3
     kgord = 1
     tmp_kgel(1) = 1
@@ -225,9 +228,15 @@ contains
           end if
        end if
 
-       if ( (ibz .eq. 0) .and. (I <= kgord)) then
+       if (I <= kgord) then
           call factorgroup(listp, k2gord, kgord, nopi, nopi1, nopli, nopli1, mtab2, til, &
-               & sil, kgel, a, ai, b, u, rk, rgr )
+               & sil, kgel, a, ai, b, u, rk, rgr, factor_group_ok)
+          if (.not. factor_group_ok) then
+             deallocate(inverk)
+             deallocate(tmp_kgel)
+             return
+          end if
+          ibz = 0
        end if
     end if
 
@@ -299,9 +308,9 @@ contains
   
   ! formation of the factor group Gk/Tk
   
-  ! Here we treat the case of a nonsymmorphic group of the k-vector, with the
-  ! k-vector on one of the sides of the Brillouin zone boundaries. First, initiate
-  ! the tables used to construct the factor group Gk/Tk. k2gord will be the order
+  ! For a nonsymmorphic little group, construct a finite central extension from
+  ! the Bloch phases. This applies at boundary and interior k-points whenever the
+  ! phases close at finite order. k2gord will be the order
   ! of this group. listp(I) contains the index of the pointgroup operator of the
   ! Ith element of this group. Several elements may have the same pointgroup
   ! operator, so that they differ only in the translation part til(I,K), K = 1:3
@@ -313,7 +322,7 @@ contains
   ! nr(I) = k2gord.
   !
   subroutine factorgroup(listp, k2gord, kgord, nopi, nopi1, nopli, nopli1,  &
-          & mtab2, til, sil, kgel, a, ai, b, u, rk, rgr )
+          & mtab2, til, sil, kgel, a, ai, b, u, rk, rgr, success)
 
     integer, intent(out) :: listp(:)
     integer, intent(out) :: k2gord
@@ -335,21 +344,24 @@ contains
 
     real(dp), intent(in) :: rk(:)
     real(dp), intent(in) :: rgr(:,:,:)
+    logical, intent(out) :: success
 
     integer, allocatable :: mtab3(:,:)
     integer :: I, point_index, existing_index
     integer :: left_index, right_index, product_point
-    integer :: factor_capacity, initial_kgord, previous_order
-    real(dp), dimension(3) :: product_translation
+    integer :: factor_capacity, initial_kgord, max_phase_order, previous_order
+    real(dp), dimension(3) :: phase_translation, product_translation
     complex(dp) :: product_phase
 
     initial_kgord = kgord
     k2gord = initial_kgord
+    success = .true.
     factor_capacity = min(size(mtab2, 1), size(mtab2, 2), size(listp), size(sil), &
          & size(til, 1), size(nopli, 2))
 
     if (initial_kgord > factor_capacity) then
-       error stop "Factor-group capacity smaller than little-group order"
+       success = .false.
+       return
     end if
 
     allocate(mtab3(factor_capacity, factor_capacity))
@@ -365,13 +377,24 @@ contains
        listp(I) = I
        point_index = kgel(I)
        til(I, 1:3) = u(point_index, 1:3)
-       sil(I) = bloch_phase(til(I, 1:3))
+       phase_translation(:) = til(I, 1:3)
+       sil(I) = bloch_phase(rk(1:3), phase_translation)
        nopi(I) = 1
        nopli(I, 1) = I
     end do
 
     til(1, 1:3) = 0.0_dp
     sil(1) = cmplx(1.0_dp, 0.0_dp, dp)
+
+    max_phase_order = max(1, factor_capacity/initial_kgord)
+    do I = 1, initial_kgord
+       if (.not. phase_has_finite_order(sil(I), max_phase_order)) then
+          success = .false.
+          kgord = initial_kgord
+          deallocate(mtab3)
+          return
+       end if
+    end do
 
     do
        previous_order = k2gord
@@ -385,10 +408,16 @@ contains
              existing_index = find_factor_element(product_point, product_phase)
              if (existing_index == 0) then
                 if (k2gord >= factor_capacity) then
-                   error stop "Factor-group capacity exceeded"
+                   success = .false.
+                   kgord = initial_kgord
+                   deallocate(mtab3)
+                   return
                 end if
                 if (nopi(product_point) >= size(nopli, 2)) then
-                   error stop "Too many factor-group lifts for one point operation"
+                   success = .false.
+                   kgord = initial_kgord
+                   deallocate(mtab3)
+                   return
                 end if
 
                 k2gord = k2gord + 1
@@ -406,7 +435,10 @@ contains
 
        if (.not. any(mtab3(1:k2gord, 1:k2gord) == 0)) exit
        if (k2gord == previous_order) then
-          error stop "Factor-group multiplication table is incomplete"
+          success = .false.
+          kgord = initial_kgord
+          deallocate(mtab3)
+          return
        end if
     end do
 
@@ -421,13 +453,19 @@ contains
 
   contains
 
-    complex(dp) function bloch_phase(translation) result(phase)
-      real(dp), intent(in) :: translation(3)
-      complex(dp) :: phase_argument
+    logical function phase_has_finite_order(phase, max_order) result(has_finite_order)
+      complex(dp), intent(in) :: phase
+      integer, intent(in) :: max_order
+      integer :: phase_order
 
-      phase_argument = cmplx(0.0_dp, -dot_product(rk(1:3), translation(1:3)), dp)
-      phase = exp(phase_argument)
-    end function bloch_phase
+      has_finite_order = .false.
+      do phase_order = 1, max_order
+         if (abs(phase**phase_order - cmplx(1.0_dp, 0.0_dp, dp)) <= tol_irrep_phase) then
+            has_finite_order = .true.
+            return
+         end if
+      end do
+    end function phase_has_finite_order
 
     subroutine multiply_factor_elements(left, right, product_point_out, translation_out, phase_out)
       integer, intent(in) :: left, right
@@ -447,7 +485,7 @@ contains
       rotated_cart = matmul(rgr(1:3, 1:3, rotation_index), translation_cart)
       rotated_fractional = matmul(ai(1:3, 1:3), rotated_cart)
       translation_out(1:3) = til(left, 1:3) + rotated_fractional(1:3)
-      phase_out = bloch_phase(translation_out)
+      phase_out = bloch_phase(rk(1:3), translation_out)
     end subroutine multiply_factor_elements
 
     integer function find_factor_element(point, phase) result(found_index)

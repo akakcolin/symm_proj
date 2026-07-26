@@ -23,12 +23,13 @@ contains
 
     integer :: n1, n2, n3
     real(dp) :: cark(3), gvec(3), nred(3)
-    real(dp) :: zero_norm, shifted_norm, metric_tol
+    real(dp) :: zero_norm, shifted_norm, metric_tol, reciprocal_scale
     logical :: on_boundary
 
     cark(1:3) = matmul(b(1:3, 1:3), rk(1:3))
     zero_norm = sum(cark(1:3)**2)
-    metric_tol = 1.0e-10_dp * max(1.0_dp, zero_norm)
+    reciprocal_scale = max(sum(b(:,1)**2), sum(b(:,2)**2), sum(b(:,3)**2))
+    metric_tol = tol_kpoint_membership*max(reciprocal_scale, tol_zero)
     on_boundary = .false.
 
     do n1 = -3, 3

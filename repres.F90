@@ -6,6 +6,7 @@ module repres
   use subsp
   use eigvec 
   use degen
+  use sympw_group_mode, only: projective_factor_group_active
   implicit none
   private
   public :: sym_repres 
@@ -77,16 +78,19 @@ contains
     integer :: LG, LPE, N7, NO1
     integer :: I,II, I1, I2, I3, I4, I5, IV, IN
     integer :: J, J1, J2
-    integer :: N, N6, N8
+    integer :: N, N6
     integer :: K1, K11, K2, K3, K4, K5, K6, K7, KJ
     integer :: IND
     complex(dp) :: RIN
     real(dp) :: RINAB
     integer :: ML1, ML2, LJ1, ncl1, nip, NML, numl, nopil
+    integer :: row_idx, col_idx
     
     complex(dp) :: pi2i
     complex(dp) :: lab
     complex(dp) :: P 
+    complex(dp) :: expected_phase_entry
+    logical :: phase_compatible
     
     integer, allocatable :: n2(:)
 
@@ -152,7 +156,7 @@ contains
        write(*,*)
     end if
 
-    pi2i = cmplx(0, 2*pi)
+    pi2i = cmplx(0.0_dp, 2*pi, kind=dp)
 
     KJ = 0
     do while (KJ < ncl)
@@ -346,7 +350,7 @@ contains
              grupelord2(2, II) = aimag(ch(J, cind(II)))
           end do
           do II = 1, G
-             grupel(1, 1, II) = cmplx(grupelord2(1, II), grupelord2(2, II))
+             grupel(1, 1, II) = cmplx(grupelord2(1, II), grupelord2(2, II), kind=dp)
           end do
           if(steer(8) .ne. 0) then ! steer(8)
              do I3 = 1, G
@@ -356,19 +360,24 @@ contains
           end if
        end if
 
-       if( .not. ((ibz .ne. 0) .or. (steer(20) .ne. 0) .or. (ksym .ne. 0) )) then 
+       if (projective_factor_group_active(steer(20), ksym, ibz)) then
           N6 = 1
           do while (N6 <= nopi1)
              N7 = nopli1(N6)
-             N8 = 1
-             do while (N8 <= LJ1)
-                if(abs(sil(N7) - grupel(N8, N8, N7)) > tol_irrep_phase) THEN
-                   exit
-                end if
-                N8 = N8 + 1
+             phase_compatible = .true.
+             do row_idx = 1, LJ1
+                do col_idx = 1, LJ1
+                   expected_phase_entry = cmplx(0.0_dp, 0.0_dp, kind=dp)
+                   if (row_idx == col_idx) expected_phase_entry = sil(N7)
+                   if (abs(grupel(row_idx, col_idx, N7) - expected_phase_entry) > tol_irrep_phase) then
+                      phase_compatible = .false.
+                      exit
+                   end if
+                end do
+                if (.not. phase_compatible) exit
              end do
-             if (N8 <= LJ1) then
-                exit
+             if (.not. phase_compatible) then
+               exit
              end if
              N6 = N6 + 1
           end do

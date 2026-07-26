@@ -3,7 +3,7 @@ module eigensolver
   use constants
   implicit none
   private
-  public :: geev
+  public :: geev, heev
 
 !  !!* Simple eigensolver for a general matrix
 !  !!* @param a contains the matrix for the solver, returns eigenvalues if
@@ -19,6 +19,10 @@ module eigensolver
     module procedure cmplx_cgeev
     module procedure dblecmplx_zgeev
   end interface geev
+
+  interface heev
+    module procedure dblecmplx_zheev
+  end interface heev
 
 contains
   
@@ -58,7 +62,7 @@ contains
        endif
     endif
     deallocate(work)
-    w=cmplx(wr,wl)
+    w = cmplx(wr, wl, kind=rsp)
     deallocate(wr)
     deallocate(wl)
   end subroutine real_sgeev
@@ -99,7 +103,7 @@ contains
        endif
     endif
     deallocate(work)
-    w=cmplx(wr,wl)
+    w = cmplx(wr, wl, kind=rdp)
     deallocate(wr)
     deallocate(wl)
   end subroutine dble_dgeev
@@ -181,5 +185,36 @@ contains
     deallocate(rwork)
     deallocate(work)
   end subroutine dblecmplx_zgeev
+
+  subroutine dblecmplx_zheev(a, w, info)
+    complex(rdp), intent(inout) :: a(:,:)
+    real(rdp), intent(out) :: w(:)
+    integer, intent(out) :: info
+
+    integer :: int_idealwork, n
+    complex(rdp) :: idealwork(1)
+    complex(rdp), allocatable :: work(:)
+    real(rdp), allocatable :: rwork(:)
+
+    n = size(a, 1)
+    if (size(a, 2) /= n .or. size(w) < n) then
+       info = -1
+       return
+    end if
+
+    allocate(rwork(max(1, 3*n - 2)))
+    call ZHEEV('V', 'U', n, a, max(1, n), w, idealwork, -1, rwork, info)
+    if (info /= 0) then
+       deallocate(rwork)
+       return
+    end if
+
+    int_idealwork = max(1, int(real(idealwork(1), kind=rdp)))
+    allocate(work(int_idealwork))
+    call ZHEEV('V', 'U', n, a, max(1, n), w, work, int_idealwork, rwork, info)
+
+    deallocate(work)
+    deallocate(rwork)
+  end subroutine dblecmplx_zheev
 
 end module eigensolver

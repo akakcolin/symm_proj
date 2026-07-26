@@ -1,9 +1,11 @@
 module modsymprj
   use accuracy
   use constants 
+  use sympw_group_mode, only: projective_factor_group_active
   use groupkp
   use irrep
   use projmat
+  use sumsets, only: sym_sumsets
   use genera
   implicit none
   private
@@ -40,59 +42,33 @@ contains
     !complex(dp), intent(in) :: rcgr3(:,:,:)
     complex(dp), intent(in) :: res(:,:)
 
-    integer :: I1, I10, I11, I12, I3, I4, I5, I6, I7, I8, I9
-    integer :: ichem, ito, ifd
     integer :: nopi1
     integer :: I, J, K, K1, K2, IV
-    integer :: K3, K4, K5, LD1, M2, mu1, mu2, KI, kg
-    integer :: II, J1, JD, JJ, R5
-    integer :: index1, ikp
-    integer :: ilmax, indk1, isign, itotal
-    integer :: order, first, uco
+    integer :: kg
+    integer :: ikp
+    integer :: order, first
     integer :: kgord, k2gord
-    integer :: tmp_dim ! temp value for maxvalue of np
-    integer :: J2, LJ1, KJ
-    integer :: nmberg
-    integer :: index
-    integer :: L, L1, L2
-    integer :: N, N2, NT, nb, ntr, nup, NN1, NN2, NC
-    integer :: nblock, ndi, nip, nfacto
-    integer :: nal, N3, N31, N1, ncl
+    integer :: L, L2
+    integer :: nup
+    integer :: nip
+    integer :: nal, ncl
     integer :: number_of_wave_vectors
     integer :: ksym, ntz, ibz
-    integer :: M1, ncoset
-
-    real(dp) :: R1
-    real(dp) :: ptrace, sumtot
 
     integer, dimension(100) :: npri
-    logical :: is_ski
+    logical :: factor_group_ok, projective_mode
 
-    real(dp) :: rh, rntr
     real(dp) :: tsmall, ttsmall
-    real(dp) :: T, TT, TTT
-    real(dp) :: ar
-    real(dp) :: ep 
-    real(dp) :: lsqsum
 
-    real(dp), dimension(3) :: rk, ark, srk, brk, rosk, robrk
+    real(dp), dimension(3) :: rk, ark, srk
     real(dp), dimension(3,3) :: b, bi, ai
-    real(dp), dimension(3) :: tsk
-    real(dp), dimension(3) :: rprod
-    real(dp), dimension(3) :: difi, dif
-    real(dp), dimension(3) :: trac
-
-    complex(dp) :: sres
-    complex(dp) :: R4
 
     integer, allocatable :: listp(:)
     integer, allocatable :: gel(:)
     integer, allocatable :: kgel(:) 
     integer, allocatable :: kkgel(:)
-    integer, allocatable :: map(:,:)
     integer, allocatable :: mtab(:,:)
     integer, allocatable :: mtab2(:,:)
-    integer, allocatable :: ngen(:)
     integer, allocatable :: nalr(:)
     integer, allocatable :: nopli1(:)
     integer, allocatable :: nopli(:,:)
@@ -105,22 +81,14 @@ contains
     integer, allocatable  :: cind_invp(:)
 
     real(dp), allocatable :: rgr(:,:,:)
-    real(dp), allocatable :: inverk(:)
-    real(dp), allocatable :: factor(:)
     real(dp), allocatable :: til(:,:) 
-    real(dp), allocatable :: jdpk(:,:)
-    real(dp), allocatable :: tmatri(:,:)
-    real(dp), allocatable :: jdprod(:,:)
     real(dp), allocatable :: nvec(:,:,:,:,:)
 
     complex(dp), allocatable :: sil(:)
     complex(dp), allocatable :: jpdd(:,:,:)
     complex(dp), allocatable :: temp_matrix(:,:)
 
-    !integer, allocatable :: column_index(:,:), row_index(:,:), column_index_tmp(:,:)
-    integer :: col, I2
     integer :: shift_columns, binx, oinx
-    real(dp) ::  D
 
     nopi1 = 1;
     ksym = 1;
@@ -226,8 +194,6 @@ contains
        write(*,*) "Reciprocal unit cell vectors:"
     end if
 
-    T = 2*pi
-
     b(:,:) = a(:,:)
     call sym_matinv(b, 3)
     bi = transpose(a)
@@ -244,8 +210,8 @@ contains
        write(*,*) 'The unit cell contains', nel, ' chemical elements\n'
 
     end if
-    tsmall = 0.00001
-    ttsmall = 0.000001
+    tsmall = tol_rotation_match
+    ttsmall = tol_projection_work
 
     allocate(np(nel, maxval(nat), maxval(nat)))
     allocate(nvec(nel, maxval(nat(:)), maxval(nat(:)), 100, 3))
@@ -341,22 +307,6 @@ contains
     !column_index(1,1) = 1
     !row_index(1,1) = 1
 
-    col = 1
-    !do I = 1, nel
-    !   J = nat(I)
-    !   do K=2, lmax(I)
-    !      l = j*(2*(K-2) + 1)
-    !      col = col + l
-    !      column_index(K, I) = col
-    !      row_index(K, I) = col
-    !   end do
-    !   if( I < nel) then
-    !      col = col + J*(2*lmax(I) + 1)
-    !      column_index(1, I+1) = col
-    !      row_index(1, I+1) = col
-    !   end if
-    !end do
-
     num_block(:) = 1
     do ikp = 1, number_of_wave_vectors
        !do I = 1, nel
@@ -409,7 +359,7 @@ contains
           nopi(:) = 1
 
           !write(*,*) "rk", rk(1:3)
-          sil(1)= cmplx(1, 0)
+          sil(1) = cmplx(1.0_dp, 0.0_dp, kind=dp)
           kgel(1) = 1
           kgord= 1
           rk(1:3) = ark(1:3)*2*pi
@@ -417,7 +367,12 @@ contains
 
           call sym_groupkp(kg, kgord, k2gord, kgel, kkgel, mtab2, ibz, listp, &
                & nopi, nopi1, nopli, nopli1, sil, til, ksym, rk, ark, a, ai, b,bi, u, order,pgnr, &
-               & rgr, mtab, gel, steer, tsmall)
+               & rgr, mtab, gel, steer, tsmall, factor_group_ok)
+          if (.not. factor_group_ok) then
+             write(*,*) "Skipping k-point: projective phases do not form a supported finite factor group"
+             deallocate(kgel, kkgel, nopli1, sil, nopi, nopli, listp)
+             cycle
+          end if
        end if
 
 
@@ -438,11 +393,11 @@ contains
        end do
        write(*,*)
 
-       is_ski = ((steer(20) .ne. 0) .or. (ksym .ne. 0) .or. (ibz .ne. 0))
+       projective_mode = projective_factor_group_active(steer(20), ksym, ibz)
 
-       !write(*,*) "is_ski, steer(20), ksym, ibz", is_ski, steer(20), ksym, ibz
+       !write(*,*) "projective_mode, steer(20), ksym, ibz", projective_mode, steer(20), ksym, ibz
 
-       if (.not. is_ski) then
+       if (projective_mode) then
           write(*,*) " "
           write(*,*) "The factor group Gk/Tk consists of"
           do I = 1, kgord
@@ -451,15 +406,14 @@ contains
           end do
        end if
 
-       ! Now we have determined the point group of the wave vector, or (for
-       ! the nonsymmorphic case with wave vector the BZ-boundary) the factor
-       ! group Gk/Tk.
+       ! Now we have determined the point group of the wave vector, or the finite
+       ! factor group used to represent its nonsymmorphic projective irreps.
 
        !Next we determine all (allowable) irreducible representations of this finite group.
 
        allocate(cind_invp(kgord))
-       if ((IV <= 2) .or. is_ski) then
-          allocate(jpdd(kgord, kgord, kgord))
+       if ((IV <= 2) .or. .not. projective_mode) then
+          allocate(jpdd(kgord, maxdim, kgord))
           allocate(laj(kgord))
           allocate(allow(kgord))
           allow(:) = 0
@@ -499,143 +453,13 @@ contains
              write(*,*) "Allowed irreps for J = ", nalr(1:nal)
           end if
 
-          nblock = 0
-          do ilmax = 1, nel
-             nblock = nblock + lmax(ilmax) + 1
-          end do
-
           write(*,*) " "
           write(*,*) "There are ", nup , "projection matrices"
           write(*,*) "for the wave vector"
           write(*,*)" with index J for the irreps and index JD for the diagonal elements of the irrep."
 
-          !write(*,*) "Each projection matrix is blockdiagonalized with respect to the indices ichem = 1, ", nel
-          !write(*,*) "and L = ", lmax(1:nel), ", so each projection matrix consists of", nblock
-          !write(*,*) "subblocks of sub-projection matrices along the main diagonal. "
-          !write(*,*) "These are independently orthonormalised into suh-T-matrices, from which the "
-          !write(*,*) "complete T-matrix can be constructed"
-
-
-          !call sym_sumsets( np, nvec, npl, til, kgord, kgel, rgr, listp, &
-          !     & a, ai, b, r, u, nel, nat, ksym, ibz, steer)
-
-          ! Formation of the summation sets G(MU,NU). nup is the number of projection
-          ! matrices for this wave vector. We form np(K,I,J), which is the number
-          ! of elements of the group of the k-vector (groupk), for which the difference
-          ! rgr*(coordinate of atom I) - (coordinate of atom J) of chemical element K,
-          ! is a lattice vector. npl(1:nel,1:nat(I1),1:nat(I1),1:np(1:nel,1:nat(I1),
-          ! 1:nat(I1))) gives the indices of these pointgroup operators.
-          ! nvec(1:nel,1:nat(I1),1:nat(I1),1:np(1:nel,1:nat(I1),1:nat(I1)),1:3)
-          ! gives the corresponding lattice vectors.
-
-          !real(dp), dimension(3) :: difi, dif, trac
-
-          !  integer :: I, I1, I2, I3, I4, I5, I6, I7, I8, II 
-          !  integer :: J, isign, K, ifd
-
-          !allocate(nvec(nel, nat(I1), nat(I1),tmp_dim, 3))
-
-          I = 0
-          do while (I < nel)
-             I = I + 1
-             ! I1 is here the index of the chemical element
-             J = nat(I)
-             ! JJ is the number of atoms of chemical element I1
-             I1 = 0
-             do while (I1 < J)
-                I1 = I1 + 1
-                !I1 is the atom row index
-                np(I, I1, 1:J) = 0
-                I2 = 0
-
-!!!!!!!!!!!!!!!!!!!!!!!!!!!! need to check  whether is right !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-                do while (I2 < kgord)
-                   I2 = I2 + 1
-                   ! I2 is the index of elements of groupk
-                   I3 = I2
-
-                   ! inverse point group operator
-                   if (.not. ((steer(20) .ne. 0) .or. (ksym .ne. 0) .or. (ibz .ne. 0))) then
-                      I4 = listp(I3)
-                      I4 = kgel(I4)
-                      !need to check 
-                      trac(1:3) = matmul( a(1:3, 1:3), til(I2,1:3))
-                      ! nonprimitive translations in cartesian coordinates
-                   else
-
-                      I5 = kgel(I2)
-                      I4 = kgel(I3)
-                      trac(1:3) = matmul(a(1:3, 1:3), u(I5,1:3))
-                   end if
-
-                   do I6= 1, 3
-                      do I7 = 1, 3
-                         ! space group transformation of the atom position vector
-                         trac(I6) = trac(I6) + rgr(I6, I7, I4)*r(I7, I, I1)
-                      end do
-                   end do
-
-                   I8 = 1
-                   do while( I8 <= J)
-                      ! i9 is the atom column index
-                      do II = 1, 3
-                         dif(II) = trac(II) - r(II, I, I8)
-                      end do
-                      !todo check
-                      do II = 1, 3
-                         difi(II) = ai(1,II)*dif(1) + ai(2, II)*dif(2) + ai(3,II)*dif(3)
-                      end do
-                      ! transform to lattice coordinates. Test if difi is a lattice vector
-
-                      do II = 1, 3
-                         isign = 1
-                         if (difi(II) < 0) then
-                            isign = -1
-                         end if
-                         D = isign*difi(II)
-
-                         if (D>0) then ! fix(D)
-                            ifd = floor(D)
-                         else
-                            ifd = ceiling(D)
-                         end if
-
-                         if ((D - ifd) >= 0.98) then
-                            ifd = ifd + 1
-                         end if
-                         if (abs(D-ifd) > 0.02) then
-                            exit
-                         end if
-                         difi(II) = isign*ifd
-                      end do
-
-                      if (abs(D-ifd) <= 0.02) then
-                         np(I, I1, I8) = np(I, I1, I8) + 1
-                         K = np(I, I1, I8)
-                         npl(I, I1, I8, K) = I2
-                         nvec(I, I1, I8, K, 1:3) = difi(1:3)
-                         if (steer(18) .ne. 0) then
-                            write(*,*) "np=(", I, I1, I8, "=", K, " npl=", I2, "nvec=", difi(1:3)
-                         end if
-                         exit
-                      end if
-                      I8 = I8 + 1
-                   end do
-                   if (I8 > J) then
-                      write(*,*) "Wrong space group", I, I1, I2, I4
-                      stop
-                   end if
-                end do
-                if (I8 > J) then
-                   exit
-                end if
-             end do
-             if (I8 > J) then
-                exit
-             end if
-          end do
-
-          !end subroutine sym_sumsets
+          call sym_sumsets(np, nvec, npl, til, kgord, kgel, rgr, listp, &
+               a, ai, b, r, u, nel, nat, ksym, ibz, steer)
 
           call sym_projmat(laj, kgord, allow, jpdd, projmatrix(:,:, ikp), nvec, nat, lmax, np, nel, ncl, npl, &
                & kgel, kkgel, listp, steer, ksym, ibz, pgnr, ldrmm, rk, u, tsmall, ttsmall)

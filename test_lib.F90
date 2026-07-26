@@ -12,8 +12,10 @@
 !   Scenario 8: Oh (36), Gamma,        2 atoms, lmax=2  (Si diamond primitive cell, non-symmorphic)
 !   Scenario 9: Oh (36), L-point,      8 atoms, lmax=2  (Si diamond conventional cell reduction)
 !   Scenario 10: Oh(36), X-point,      2 atoms, lmax=2  (Si diamond nonsymmorphic irrep filter)
-!   Scenario 11: Oh(36), X-point,      8 atoms, lmax=2  (conventional-cell k transform)
+!   Scenario 11: Oh(36), X-point,      8 atoms, lmax=2  (interior-k projective irreps)
 !   Scenario 12: invalid crystal metadata returns explicit error codes
+!   Scenario 13: noncommensurate projective phase fails without aborting
+!   Scenario 14: hcp P6_3/mmc A-point uses a finite screw-axis extension
 !
 ! Each scenario verifies:
 !   (1) matrix_order matches the expected basis size
@@ -37,15 +39,18 @@ program test_lib
   integer, parameter :: cell_info_checks = 3
   integer, parameter :: kpoint_info_checks = 8
   integer, parameter :: kpoint_basis_checks = 2
-  integer, parameter :: invalid_input_checks = 3
+  integer, parameter :: invalid_input_checks = 4
   integer, parameter :: scenario9_checks = checks_per_scenario + cell_info_checks + kpoint_info_checks
   integer, parameter :: scenario10_checks = checks_per_scenario + kpoint_info_checks
   integer, parameter :: scenario11_checks = checks_per_scenario + cell_info_checks + &
        kpoint_info_checks + kpoint_basis_checks
   integer, parameter :: scenario12_checks = invalid_input_checks
-  integer, parameter :: expected_scenarios = 12
+  integer, parameter :: scenario13_checks = 1
+  integer, parameter :: scenario14_checks = checks_per_scenario + kpoint_info_checks + 2
+  integer, parameter :: expected_scenarios = 14
   integer :: error_code, passed, total, scenario_passed, scenarios_ok, expected_order
   real(dp) :: expected_transform(3,3), expected_kpoint(3)
+  logical :: tr_ok
 
   passed = 0
   total = 0
@@ -306,8 +311,9 @@ program test_lib
 
   ! ==========================================
   ! Scenario 11: Oh (36), X-point, Si diamond conventional cell
-  !              Checks that API results preserve caller-basis k
-  !              and report the primitive-basis k used internally.
+  !              Checks that API results preserve caller-basis k,
+  !              report the primitive-basis k used internally, and
+  !              construct the finite projective factor group at interior k.
   ! ==========================================
   write(*,*)
   write(*,*) "--- Scenario 11: Oh(36), X-point, Si diamond conventional cell ---"
@@ -328,14 +334,14 @@ program test_lib
      expected_kpoint(:) = (/0.25_dp, 0.5_dp, 0.25_dp/)
      call sympw_analyze_kpoint(kpoint, result)
      call check_kpoint_basis(result, kpoint, expected_kpoint, scenario_passed, total)
-     call check_kpoint_info(result, .false., 4, 4, 4, 4, 4, 4, scenario_passed, total)
+     call check_kpoint_info(result, .true., 4, 8, 8, 4, 8, 4, scenario_passed, total)
      call check_result(result, expected_order, scenario_passed, total, max_err, trace_val, crystal%lmax, (/2/))
      call sympw_finalize()
   end if
   call teardown_crystal(crystal)
   passed = passed + scenario_passed
   if (scenario_passed == scenario11_checks) scenarios_ok = scenarios_ok + 1
-  write(*,'(A,I2,A)') "  Scenario 11: ", scenario_passed, "/20 checks passed"
+  write(*,'(A,I2,A,I2,A)') "  Scenario 11: ", scenario_passed, "/", scenario11_checks, " checks passed"
 
   ! ==========================================
   ! Scenario 12: invalid crystal metadata
@@ -367,9 +373,79 @@ program test_lib
   call check_error_code("bad position shape", error_code, 10, scenario_passed, total)
   call teardown_crystal(crystal)
 
+  call setup_minimal_crystal_header(crystal)
+  allocate(crystal%nat(1), crystal%lmax(1), crystal%pos_frac(3, 1, 1))
+  crystal%lattice(2, :) = crystal%lattice(1, :)
+  crystal%nat(1) = 1
+  crystal%lmax(1) = 0
+  crystal%pos_frac(:, :, :) = 0.0_dp
+  call sympw_init(crystal, error_code)
+  call check_error_code("singular lattice", error_code, 13, scenario_passed, total)
+  call teardown_crystal(crystal)
+
   passed = passed + scenario_passed
   if (scenario_passed == scenario12_checks) scenarios_ok = scenarios_ok + 1
-  write(*,'(A,I2,A)') "  Scenario 12: ", scenario_passed, "/3 checks passed"
+  write(*,'(A,I2,A)') "  Scenario 12: ", scenario_passed, "/4 checks passed"
+
+  ! ==========================================
+  ! Scenario 13: nonsymmorphic symmetry line with a phase that does not
+  !              close within the supported finite central extension.
+  ! ==========================================
+  write(*,*)
+  write(*,*) "--- Scenario 13: noncommensurate interior-k projective phase ---"
+  scenario_passed = 0
+
+  call setup_diamond_conventional(crystal, 0, 36)
+  call sympw_init(crystal, error_code)
+  if (error_code /= 0) then
+     write(*,*) "  FAIL: init error_code =", error_code
+  else
+     kpoint(:) = (/0.271828_dp, 0.0_dp, 0.271828_dp/)
+     call sympw_analyze_kpoint(kpoint, result)
+     call check_analysis_failure(result, scenario_passed, total)
+     call sympw_finalize()
+  end if
+  call teardown_crystal(crystal)
+  passed = passed + scenario_passed
+  if (scenario_passed == scenario13_checks) scenarios_ok = scenarios_ok + 1
+  write(*,'(A,I2,A,I2,A)') "  Scenario 13: ", scenario_passed, "/", scenario13_checks, " checks passed"
+
+  ! ==========================================
+  ! Scenario 14: hcp P6_3/mmc at A.
+  ! The 6_3 screw contributes a half-translation along c, so at
+  ! k=(0,0,1/2) its Bloch phase is -i and the 24-element little
+  ! co-group is represented by a 48-element finite extension.
+  ! ==========================================
+  write(*,*)
+  write(*,*) "--- Scenario 14: hcp P6_3/mmc A-point screw extension ---"
+  scenario_passed = 0
+  expected_order = 2
+
+  call setup_hcp_nonsymmorphic(crystal, 0, 31)
+  call sympw_init(crystal, error_code)
+  if (error_code /= 0) then
+     write(*,*) "  FAIL: init error_code =", error_code
+  else
+     kpoint(:) = (/0.0_dp, 0.0_dp, 0.5_dp/)
+     call sympw_analyze_kpoint(kpoint, result)
+     call check_kpoint_info(result, .true., 24, 48, 15, 3, 24, 8, &
+          scenario_passed, total)
+     call check_result(result, expected_order, scenario_passed, total, max_err, &
+          trace_val, crystal%lmax, crystal%nat)
+     call check_projective_labels(result, scenario_passed, total)
+     call sympw_check_spinless_time_reversal(kpoint, -kpoint, tol_projection, &
+          tr_ok, max_err)
+     total = total + 1
+     write(*,'(A,E12.4,A)') "  A-point spinless TR audit residual =", max_err, &
+          merge(" PASS", " FAIL", tr_ok .and. max_err < tol_projection)
+     if (tr_ok .and. max_err < tol_projection) scenario_passed = scenario_passed + 1
+     call sympw_finalize()
+  end if
+  call teardown_crystal(crystal)
+  passed = passed + scenario_passed
+  if (scenario_passed == scenario14_checks) scenarios_ok = scenarios_ok + 1
+  write(*,'(A,I2,A,I2,A)') "  Scenario 14: ", scenario_passed, "/", &
+       scenario14_checks, " checks passed"
 
   ! ==========================================
   ! Summary
@@ -429,6 +505,24 @@ contains
     c%pos_frac(:, 1, 1) = (/0.0_dp, 0.0_dp, 0.0_dp/)
     c%pgnr = pgnr_val
   end subroutine setup_hexagonal_1atom
+
+  subroutine setup_hcp_nonsymmorphic(c, lmax_val, pgnr_val)
+    type(sympw_crystal_t), intent(out) :: c
+    integer, intent(in) :: lmax_val, pgnr_val
+    real(dp), parameter :: lattice_a = 3.2_dp
+
+    c%lattice(1,:) = (/lattice_a, 0.0_dp, 0.0_dp/)
+    c%lattice(2,:) = (/-0.5_dp*lattice_a, &
+         0.5_dp*sqrt(3.0_dp)*lattice_a, 0.0_dp/)
+    c%lattice(3,:) = (/0.0_dp, 0.0_dp, 5.2_dp/)
+    c%nel = 1
+    allocate(c%nat(1), c%lmax(1), c%pos_frac(3, 1, 2))
+    c%nat(1) = 2
+    c%lmax(1) = lmax_val
+    c%pos_frac(:, 1, 1) = (/1.0_dp/3.0_dp, 2.0_dp/3.0_dp, 0.25_dp/)
+    c%pos_frac(:, 1, 2) = (/2.0_dp/3.0_dp, 1.0_dp/3.0_dp, 0.75_dp/)
+    c%pgnr = pgnr_val
+  end subroutine setup_hcp_nonsymmorphic
 
   subroutine setup_orthorhombic_1atom(c, lmax_val, pgnr_val)
     type(sympw_crystal_t), intent(out) :: c
@@ -642,6 +736,39 @@ contains
     if (ok) sp = sp + 1
   end subroutine check_kpoint_info
 
+  subroutine check_analysis_failure(res, sp, tot)
+    type(sympw_result_t), intent(in) :: res
+    integer, intent(inout) :: sp, tot
+
+    tot = tot + 1
+    write(*,'(A,A)') "  Unsupported projective-irrep case rejected:", &
+         merge(" PASS", " FAIL", .not. res%success)
+    if (.not. res%success) sp = sp + 1
+  end subroutine check_analysis_failure
+
+  subroutine check_projective_labels(res, sp, tot)
+    type(sympw_result_t), intent(in) :: res
+    integer, intent(inout) :: sp, tot
+    integer :: irrep_position
+    logical :: ok
+
+    ok = res%success .and. res%factor_group_used .and. allocated(res%irreps) .and. &
+         res%mulliken_status == SYMPW_MULLIKEN_STATUS_PROJECTIVE
+    if (ok) then
+       do irrep_position = 1, size(res%irreps)
+          if (len_trim(res%irreps(irrep_position)%label) == 0 .or. &
+               len_trim(res%irreps(irrep_position)%mulliken_label) /= 0) then
+             ok = .false.
+             exit
+          end if
+       end do
+    end if
+    tot = tot + 1
+    write(*,'(A,A)') "  Projective irreps use fingerprint-only labels:", &
+         merge(" PASS", " FAIL", ok)
+    if (ok) sp = sp + 1
+  end subroutine check_projective_labels
+
   subroutine check_result(res, expected_order, sp, tot, max_err, tr, lmax_list, nat_list)
     type(sympw_result_t), intent(in) :: res
     integer, intent(in) :: expected_order
@@ -670,8 +797,8 @@ contains
 
     tot = tot + 1
     write(*,'(A,E12.4,A)') "  Idempotency |P^2-P| =", max_err, &
-         merge(" PASS", " FAIL", max_err < 100.0_dp * tol_projection)
-    if (max_err < 100.0_dp * tol_projection) sp = sp + 1
+         merge(" PASS", " FAIL", max_err < tol_projection_work)
+    if (max_err < tol_projection_work) sp = sp + 1
 
     call check_hermiticity(res, max_err)
     tot = tot + 1
@@ -696,8 +823,8 @@ contains
     im_max = maxval(abs(aimag(P_real)))
     tot = tot + 1
     write(*,'(A,E12.4,A)') "  Real SH: max |Im(P)| =", im_max, &
-         merge(" PASS", " FAIL", im_max < 100.0_dp * tol_projection)
-    if (im_max < 100.0_dp * tol_projection) sp = sp + 1
+         merge(" PASS", " FAIL", im_max < tol_projection_work)
+    if (im_max < tol_projection_work) sp = sp + 1
 
     ! Check that P_real is still a projector.
     ! Tolerance relaxed vs tol_projection: the two extra matmuls in
@@ -707,8 +834,8 @@ contains
     call verify_real_projector(P_real, max_err, tr)
     tot = tot + 1
     write(*,'(A,E12.4,A)') "  Real SH: |P_real^2-P_real| =", max_err, &
-         merge(" PASS", " FAIL", max_err < 100.0_dp * tol_projection)
-    if (max_err < 100.0_dp * tol_projection) sp = sp + 1
+         merge(" PASS", " FAIL", max_err < tol_projection_work)
+    if (max_err < tol_projection_work) sp = sp + 1
 
     ! --- Block structure check ---
     if (res%n_blocks > 0) then

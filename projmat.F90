@@ -1,9 +1,11 @@
 module projmat
   use accuracy
   use constants
+  use sympw_group_mode, only: projective_factor_group_active
+  use sympw_phase, only: bloch_phase
   implicit none
   private
-  public :: sym_projmat
+  public :: sym_projmat, validate_projector_matrix
   
 contains
   ! section 8
@@ -12,7 +14,8 @@ contains
   ! section 8.1
 
   subroutine sym_projmat(laj, kgord, allow, jpdd, projmatrix, nvec, nat, lmax, np, nel, ncl, npl, &
-       & kgel, kkgel, listp, steer, ksym, ibz, pgnr, ldrmm, rk, u,tsmall, ttsmall)
+       & kgel, kkgel, listp, steer, ksym, ibz, pgnr, ldrmm, rk, u,tsmall, ttsmall, success, &
+       & irrep_column_start, irrep_column_end)
     integer, intent(in) :: kgord
     integer, intent(in) :: allow(:)
     integer, intent(in) :: ncl
@@ -37,6 +40,8 @@ contains
     real(dp), intent(in) :: rk(:)
     real(dp), intent(in) :: tsmall, ttsmall
     real(dp), intent(in) :: u(:,:)
+    logical, intent(out), optional :: success
+    integer, intent(out), optional :: irrep_column_start(:), irrep_column_end(:)
    ! integer, intent(in) :: row_index(:,:)
    ! integer, intent(inout) :: column_index_tmp(:,:)
    ! integer, intent(in) :: nblock
@@ -53,10 +58,10 @@ contains
     integer :: ncoset, K3
     integer :: I, I1,  ito, itotal
     real(dp) :: R1
-    real(dp) :: tmp_R
-    real(dp) :: rh, rntr, sumtot, ptrace 
+    real(dp) :: lattice_shift(3), nonsymmorphic_shift(3)
+    real(dp) :: rh, rntr, sumtot
 
-    complex(dp) ::R4, R5
+    complex(dp) :: R4, ptrace
     complex(dp) :: ep
 
     integer, allocatable :: nspec(:)
@@ -67,10 +72,32 @@ contains
     complex(dp), allocatable :: tmatri(:,:)
     complex(dp), dimension(72) :: ldmm
     integer, allocatable :: step_size(:)
-    integer :: temp_row, temp_col
+    integer :: temp_row, temp_col, j_column_start
     integer :: alloc_stat
+    logical :: validation_ok
 
-    allocate(step_size(nel))
+    if (present(success)) success = .true.
+    if (present(irrep_column_start)) then
+       if (size(irrep_column_start) < ncl) then
+          if (present(success)) success = .false.
+          return
+       end if
+       irrep_column_start(:) = 0
+    end if
+    if (present(irrep_column_end)) then
+       if (size(irrep_column_end) < ncl) then
+          if (present(success)) success = .false.
+          return
+       end if
+       irrep_column_end(:) = 0
+    end if
+
+    allocate(step_size(nel), stat=alloc_stat)
+    if (alloc_stat /= 0) then
+       write(*,*) "Projection workspace allocation failed: step_size"
+       if (present(success)) success = .false.
+       return
+    end if
     do ichem = 1, nel
        step_size(ichem) = 0
        do L = 0, lmax(ichem)
@@ -86,6 +113,7 @@ contains
        J = J + 1
        ! J is the index of the irreducible representation
        if (allow(J) .ne. 0) then
+          j_column_start = temp_col
 
           ! Conjugate all diagonal elements of jpdd first
           ! (conjugation moved before JD loop for clarity)
@@ -116,9 +144,16 @@ contains
                    N = 2*L + 1
                    ndi = N * nat(ichem)
 
-                   allocate(jdpk(ndi, ndi))
-                   allocate(jdprod(ndi, ndi))
-                   allocate(tmatri(ndi, ndi))
+                   allocate(jdpk(ndi, ndi), jdprod(ndi, ndi), tmatri(ndi, ndi), stat=alloc_stat)
+                   if (alloc_stat /= 0) then
+                      write(*,*) "Projection workspace allocation failed: orbital block", ndi
+                      if (allocated(jdpk)) deallocate(jdpk)
+                      if (allocated(jdprod)) deallocate(jdprod)
+                      if (allocated(tmatri)) deallocate(tmatri)
+                      deallocate(step_size)
+                      if (present(success)) success = .false.
+                      return
+                   end if
                    do mu1 = 1, nat(ichem)
                       ! mu1 is the atom index, row index in the projection matrix
                       do mu2 = 1, nat(ichem)
@@ -126,7 +161,13 @@ contains
                          ncoset = np(ichem, mu1, mu2)
                          ! ncoset is the order of the little coset
                          if (ncoset .ne. 0) then
-                            allocate(nrn(ncoset, 3))
+                            allocate(nrn(ncoset, 3), stat=alloc_stat)
+                            if (alloc_stat /= 0) then
+                               write(*,*) "Projection workspace allocation failed: atom coset", ncoset
+                               deallocate(jdpk, jdprod, tmatri, step_size)
+                               if (present(success)) success = .false.
+                               return
+                            end if
                             nrn(:,:) = 0
                             do I = 1, ncoset
                                do J1 = 1, 3
@@ -141,7 +182,7 @@ contains
                             do M2 = -L, L
                                N2 = M2 + L + 1
                                NN2 = N2 + (mu1 - 1)*N
-                               jdpk(NN1, NN2) = cmplx(0,0)
+                               jdpk(NN1, NN2) = cmplx(0.0_dp, 0.0_dp, kind=dp)
                                if (ncoset .ne. 0) then
                                   N3 = lsqsum + (N1 - 1)*N + N2
                                   if (N3 .ne. N31) then
@@ -151,19 +192,18 @@ contains
 
                                   do I = 1, ncoset
                                      K3 = npl(ichem, mu1, mu2, I)
-                                     if (.not. ((steer(20) .ne. 0) .or. (ksym .ne. 0) .or. (ibz .ne. 0))) then
+                                     if (projective_factor_group_active(steer(20), ksym, ibz)) then
                                         K = kkgel(listp(K3))
-                                        R5 = cmplx(0, 0)
+                                        nonsymmorphic_shift(:) = 0.0_dp
                                      else
                                         K = kkgel(K3)
                                         KI = kgel(K3)
-                                        tmp_R = u(KI, 1)*rk(1) + u(KI, 2)*rk(2) + u(KI,3)*rk(3)
-                                        R5 = cmplx(0, tmp_R)
+                                        nonsymmorphic_shift(:) = u(KI, 1:3)
                                      end if
                                      K = rotation_table_index(K, pgnr)
-                                     tmp_R = nrn(I,1)*rk(1) + nrn(I,2)*rk(2) + nrn(I,3)*rk(3)
-                                     R4 = cmplx(0, -tmp_R) + R5
-                                     ep = exp(R4)
+                                     lattice_shift(:) = nrn(I, 1:3)
+                                     ep = bloch_phase(rk(1:3), lattice_shift, &
+                                          nonsymmorphic_shift)
                                      ! section 8.3
                                      R4 = jpdd(J, JD, K3) * ep * ldmm(K)
                                      jdpk(NN1, NN2) = jdpk(NN1, NN2) + R4
@@ -182,19 +222,30 @@ contains
                    jdpk(1:ndi, 1:ndi) = jdpk(1:ndi, 1:ndi) * rh
 
                    ! Force Hermiticity: the projection operator is Hermitian by
-                   ! group-theoretic construction (P = P^dagger). Symmetrizing
-                   ! suppresses floating-point noise from the 48-term sum.
+                   ! group-theoretic construction (P = P^dagger). Validate the
+                   ! raw group sum before applying a roundoff cleanup.
+                   call validate_raw_projection(jdpk(1:ndi, 1:ndi), ndi, &
+                        tol_projection_work, J, JD, ichem, L, validation_ok)
+                   if (.not. validation_ok) then
+                      deallocate(jdpk, jdprod, tmatri, step_size)
+                      if (present(success)) then
+                         success = .false.
+                         return
+                      end if
+                      error stop "Raw group projection validation failed"
+                   end if
                    jdpk(1:ndi, 1:ndi) = 0.5_dp * (jdpk(1:ndi, 1:ndi) + &
                         transpose(conjg(jdpk(1:ndi, 1:ndi))))
 
                    ! Check trace: if the irrep is not contained in this orbital
                    ! space, jdpk is numerically zero — skip extraction.
-                   ptrace = cmplx(0,0)
+                   ptrace = cmplx(0.0_dp, 0.0_dp, kind=dp)
                    do III = 1, ndi
                       ptrace = ptrace + jdpk(III,III)
                    end do
                    rntr = real(ptrace)
-                   if (abs(rntr) < 0.1_dp) then
+                   ntr = nint(rntr)
+                   if (ntr == 0) then
                       ! Irrep not contained in this L-subspace; skip.
                       deallocate(jdpk)
                       deallocate(jdprod)
@@ -204,29 +255,19 @@ contains
                    ! section 8.5
                    ! we orthormalise the submatrix (fixed L, ichem) and store the resulting
                    ! sub-T-matrix
-                   !ptrace = sum(diag(jdpk(1: ndi, 1:ndi)))
-                   ptrace = cmplx(0,0)
-                   do III = 1, ndi
-                      ptrace = ptrace + jdpk(III,III)
-                   end do
-
-                   rntr = real(ptrace)
-
-                   if(rntr > 0) then
-                      ntr = floor(rntr)
-                   else
-                      ntr = ceiling(rntr)
-                   end if
-                   if ((rntr - ntr) > 0.5) then
-                      ntr = ntr + 1
-                   end if
                    if (ntr .ne. 0) then
                       ! ntr is the trace, the number of linearly independent columns in the submatrix.
                       ! First we select columns with the diagonal term equal to 1, since these are
                       ! automatically orthonormal to all other columns. Skip all columns with diagonal
                       ! term equal to 0, since these are zero columns.
                       !
-                      allocate(nspec(ndi))
+                      allocate(nspec(ndi), stat=alloc_stat)
+                      if (alloc_stat /= 0) then
+                         write(*,*) "Projection workspace allocation failed: special columns", ndi
+                         deallocate(jdpk, jdprod, tmatri, step_size)
+                         if (present(success)) success = .false.
+                         return
+                      end if
                       nspec(:) = 0
                       ! nspec(I) registrates these special columns.
                       itotal = 0
@@ -263,7 +304,7 @@ contains
                                      NC = 1
                                      do while (NC <= ito)
                                         R4 = dot_product(tmatri(1:ndi, NC), tmatri(1:ndi, itotal))
-                                        if (abs(R4) > 1.0e-10_dp) then
+                                        if (abs(R4) > tol_zero) then
                                            tmatri(1:ndi, itotal) = tmatri(1:ndi, itotal) - R4*tmatri(1:ndi, NC)
                                            R1 = sum(abs(tmatri(1:ndi, itotal))**2)
                                            if (R1 < ttsmall) then
@@ -294,13 +335,14 @@ contains
                             I = I + 1
                          end do
 
-                         if (itotal .ne. ntr) then
+                        if (itotal .ne. ntr) then
                             write(*,*) "Error, not enough orthonormal columns, itotal, ntr", itotal, ntr
                             deallocate(nspec)
                             deallocate(jdpk)
                             deallocate(jdprod)
                             deallocate(tmatri)
-                            exit
+                            if (present(success)) success = .false.
+                            return
                          end if
                       end if
                       if (allocated(nspec)) deallocate(nspec)
@@ -312,7 +354,16 @@ contains
                    ! Thereafter all of them have been calculated for all values of J, JD, ichem, L
 
                    if (itotal .ne. 0) then
-                      call validate_projection_block(tmatri(1:ndi, 1:itotal), ndi, tol_projection, J, JD, ichem, L)
+                      call validate_projection_block(tmatri(1:ndi, 1:itotal), ndi, &
+                           tol_projection, J, JD, ichem, L, validation_ok)
+                      if (.not. validation_ok) then
+                         deallocate(jdpk, jdprod, tmatri, step_size)
+                         if (present(success)) then
+                            success = .false.
+                            return
+                         end if
+                         error stop "Projection block validation failed"
+                      end if
 
                       do I = 1, itotal
                          do atom_idx = 1, nat(ichem)
@@ -350,6 +401,10 @@ contains
              end do
 
           end do
+          if (temp_col > j_column_start) then
+             if (present(irrep_column_start)) irrep_column_start(J) = j_column_start
+             if (present(irrep_column_end)) irrep_column_end(J) = temp_col - 1
+          end if
        end if
     end do
 
@@ -375,7 +430,79 @@ contains
     row_index = base_row + (atom_idx - 1)*step_size(ichem) + L*L + 1
   end function projection_block_row_index
 
-  subroutine validate_projection_block(pblock, n, tol, J, JD, ichem, L)
+  subroutine validate_projector_matrix(projector, tol, valid, max_residual)
+    complex(dp), intent(in) :: projector(:,:)
+    real(dp), intent(in) :: tol
+    logical, intent(out) :: valid
+    real(dp), intent(out), optional :: max_residual
+
+    complex(dp), allocatable :: squared(:,:), delta(:,:)
+    complex(dp) :: trace_value
+    real(dp) :: idempotency_residual, hermiticity_residual, trace_residual
+    integer :: n, row_idx, alloc_stat
+
+    valid = .false.
+    if (present(max_residual)) max_residual = huge(1.0_dp)
+    if (tol < 0.0_dp .or. size(projector, 1) /= size(projector, 2)) return
+
+    n = size(projector, 1)
+    if (n < 1) return
+    allocate(squared(n, n), delta(n, n), stat=alloc_stat)
+    if (alloc_stat /= 0) return
+
+    squared = matmul(projector, projector)
+    delta = squared - projector
+    idempotency_residual = maxval(abs(delta))
+
+    delta = projector - transpose(conjg(projector))
+    hermiticity_residual = maxval(abs(delta))
+
+    trace_value = cmplx(0.0_dp, 0.0_dp, kind=dp)
+    do row_idx = 1, n
+       trace_value = trace_value + projector(row_idx, row_idx)
+    end do
+    trace_residual = max(abs(aimag(trace_value)), &
+         abs(real(trace_value) - nint(real(trace_value))))
+
+    if (present(max_residual)) then
+       max_residual = max(idempotency_residual, hermiticity_residual, trace_residual)
+    end if
+    valid = idempotency_residual <= tol .and. hermiticity_residual <= tol .and. &
+         abs(aimag(trace_value)) <= tol .and. &
+         abs(real(trace_value) - nint(real(trace_value))) <= tol_projector_trace
+
+    deallocate(squared, delta)
+  end subroutine validate_projector_matrix
+
+  subroutine validate_raw_projection(raw_projector, n, tol, J, JD, ichem, L, valid)
+    complex(dp), intent(in) :: raw_projector(:,:)
+    integer, intent(in) :: n
+    real(dp), intent(in) :: tol
+    integer, intent(in) :: J
+    integer, intent(in) :: JD
+    integer, intent(in) :: ichem
+    integer, intent(in) :: L
+    logical, intent(out) :: valid
+
+    real(dp) :: max_residual
+
+    valid = .false.
+    if (size(raw_projector, 1) /= n .or. size(raw_projector, 2) /= n) then
+       write(*,*) "Raw projection block has inconsistent dimensions for J =", J, &
+            ", JD =", JD, ", ichem =", ichem, ", L =", L
+       return
+    end if
+
+    call validate_projector_matrix(raw_projector, tol, valid, max_residual)
+    if (.not. valid) then
+       write(*,*) "Raw projection validation failed for J =", J, &
+            ", JD =", JD, ", ichem =", ichem, ", L =", L
+       write(*,*) "Maximum residual =", max_residual
+    end if
+  end subroutine validate_raw_projection
+
+
+  subroutine validate_projection_block(pblock, n, tol, J, JD, ichem, L, valid)
     complex(dp), intent(in) :: pblock(:,:)
     integer, intent(in) :: n
     real(dp), intent(in) :: tol
@@ -383,100 +510,64 @@ contains
     integer, intent(in) :: JD
     integer, intent(in) :: ichem
     integer, intent(in) :: L
+    logical, intent(out) :: valid
 
-    complex(dp), allocatable :: projector(:,:), p2(:,:), delta(:,:)
+    complex(dp), allocatable :: projector(:,:)
     complex(dp), allocatable :: gram(:,:)
-    complex(dp) :: trace_value
-    integer :: m, row_idx, col_idx
+    real(dp) :: max_residual
+    integer :: m, alloc_stat
 
+    valid = .false.
     m = size(pblock, 2)
     if (size(pblock, 1) /= n) then
        write(*,*) "Projection block has inconsistent row count for J =", J, &
             & ", JD =", JD, ", ichem =", ichem, ", L =", L
        write(*,*) "Expected", n, " rows, got", size(pblock, 1)
-       error stop "Projection block has inconsistent dimensions"
+       return
     end if
 
     ! Check column orthonormality: pblock^H * pblock ≈ I_m
-    allocate(gram(m, m))
+    allocate(gram(m, m), stat=alloc_stat)
+    if (alloc_stat /= 0) then
+       write(*,*) "Projection block Gram allocation failed"
+       return
+    end if
     gram = matmul(transpose(conjg(pblock)), pblock)
-    do row_idx = 1, m
-       do col_idx = 1, m
-          if (row_idx /= col_idx) then
-             if (abs(gram(row_idx, col_idx)) > tol_projection) then
-                write(*,*) "Projection block column orthogonality failed for J =", J, &
-                     & ", JD =", JD, ", ichem =", ichem, ", L =", L
-                write(*,*) "At column pair (", row_idx, ",", col_idx, ")"
-                write(*,*) "Residual =", abs(gram(row_idx, col_idx))
-                error stop "Projection block columns are not orthogonal"
-             end if
-          else
-             if (abs(gram(row_idx, col_idx) - 1.0_dp) > tol_projection) then
-                write(*,*) "Projection block column normalization failed for J =", J, &
-                     & ", JD =", JD, ", ichem =", ichem, ", L =", L
-                write(*,*) "At column ", row_idx
-                write(*,*) "Norm =", real(gram(row_idx, col_idx))
-                error stop "Projection block columns are not normalized"
-             end if
-          end if
-       end do
-    end do
+    gram = gram - identity_matrix(m)
+    max_residual = maxval(abs(gram))
     deallocate(gram)
-
-    ! Build the full projector: P = pblock * pblock^H
-    allocate(projector(n, n))
-    allocate(p2(n, n))
-    allocate(delta(n, n))
-    projector = matmul(pblock, transpose(conjg(pblock)))
-
-    ! Check idempotency: P^2 = P
-    p2 = matmul(projector, projector)
-    delta = p2 - projector
-    do row_idx = 1, n
-       do col_idx = 1, n
-          if (abs(delta(row_idx, col_idx)) > tol) then
-             write(*,*) "Projection block idempotency failed for J =", J, &
-                  & ", JD =", JD, ", ichem =", ichem, ", L =", L
-             write(*,*) "At (", row_idx, ",", col_idx, ") residual =", abs(delta(row_idx, col_idx))
-             error stop "Projection block is not idempotent"
-          end if
-       end do
-    end do
-
-    ! Check Hermiticity: P = P^H (should be automatic from construction)
-    delta = projector - transpose(conjg(projector))
-    do row_idx = 1, n
-       do col_idx = 1, n
-          if (abs(delta(row_idx, col_idx)) > tol) then
-             write(*,*) "Projection block Hermiticity failed for J =", J, &
-                  & ", JD =", JD, ", ichem =", ichem, ", L =", L
-             write(*,*) "At (", row_idx, ",", col_idx, ") residual =", abs(delta(row_idx, col_idx))
-             error stop "Projection block is not Hermitian"
-          end if
-       end do
-    end do
-
-    ! Check trace is integer (equals subspace dimension m)
-    trace_value = cmplx(0.0_dp, 0.0_dp, kind=dp)
-    do row_idx = 1, n
-       trace_value = trace_value + projector(row_idx, row_idx)
-    end do
-
-    if (abs(aimag(trace_value)) > tol) then
-       write(*,*) "Projection block trace has non-negligible imaginary part for J =", J, &
+    if (max_residual > tol) then
+       write(*,*) "Projection block column orthonormality failed for J =", J, &
             & ", JD =", JD, ", ichem =", ichem, ", L =", L
-       write(*,*) "Trace =", trace_value
-       error stop "Projection block trace has non-negligible imaginary part"
+       write(*,*) "Maximum residual =", max_residual
+       return
     end if
 
-    if (abs(real(trace_value) - nint(real(trace_value))) > tol_projector_trace) then
-       write(*,*) "Projection block trace =", trace_value, "for J =", J, &
+    ! Build the full projector: P = pblock * pblock^H
+    allocate(projector(n, n), stat=alloc_stat)
+    if (alloc_stat /= 0) then
+       write(*,*) "Projection block validation allocation failed"
+       return
+    end if
+    projector = matmul(pblock, transpose(conjg(pblock)))
+    call validate_projector_matrix(projector, tol, valid, max_residual)
+    if (.not. valid) then
+       write(*,*) "Projection block validation failed for J =", J, &
             & ", JD =", JD, ", ichem =", ichem, ", L =", L
-       error stop "Projection block trace is not close to an integer"
+       write(*,*) "Maximum residual =", max_residual
     end if
 
     deallocate(projector)
-    deallocate(p2)
-    deallocate(delta)
   end subroutine validate_projection_block
+
+  function identity_matrix(n) result(identity)
+    integer, intent(in) :: n
+    complex(dp) :: identity(n,n)
+    integer :: index
+
+    identity = cmplx(0.0_dp, 0.0_dp, dp)
+    do index = 1, n
+       identity(index, index) = cmplx(1.0_dp, 0.0_dp, dp)
+    end do
+  end function identity_matrix
 end module projmat

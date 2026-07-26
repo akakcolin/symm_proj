@@ -11,14 +11,19 @@ contains
   ! 判断k点是否为时间反演不变点（TRIM）
   ! k = -k + G，其中G是倒格矢量
   logical function is_time_reversal_invariant_point(k, tol)
-    real(dp), intent(in) :: k(3)
+    real(dp), intent(in) :: k(:)
     real(dp), intent(in) :: tol
 
     real(dp) :: k_plus_minus_k(3)
     integer :: i
 
+    if (size(k) < 3) then
+       is_time_reversal_invariant_point = .false.
+       return
+    end if
+
     ! 计算 k + (-k) = 2k
-    k_plus_minus_k = 2.0_dp * k
+    k_plus_minus_k = 2.0_dp * k(1:3)
 
     ! 检查 2k 是否接近倒格矢量（即每个分量接近整数）
     is_time_reversal_invariant_point = .true.
@@ -66,14 +71,19 @@ contains
   ! 检查两个k点是否通过时间反演相关
   ! 即 k2 = -k1 + G
   logical function are_time_reversal_partners(k1, k2, tol)
-    real(dp), intent(in) :: k1(3), k2(3)
+    real(dp), intent(in) :: k1(:), k2(:)
     real(dp), intent(in) :: tol
 
     real(dp) :: k_sum(3)
     integer :: i
 
+    if (size(k1) < 3 .or. size(k2) < 3) then
+       are_time_reversal_partners = .false.
+       return
+    end if
+
     ! 计算 k1 + k2
-    k_sum = k1 + k2
+    k_sum = k1(1:3) + k2(1:3)
 
     ! 检查 k1 + k2 是否为倒格矢量（每个分量接近整数）
     are_time_reversal_partners = .true.

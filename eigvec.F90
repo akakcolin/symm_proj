@@ -16,7 +16,7 @@ contains
   !operator Sj. The resulting eigenvectors are orthonormalized to each other. If no
   !eigenvector corresponding to eigenvalue lab is found, nvec is set equal to 0.
   
-  subroutine sym_eigvec(fi, nvec, elem, eval, J, kloop, inel, cind, ch, multab, G, steer)
+  subroutine sym_eigvec(fi, nvec, elem, eval, J, inel, cind, ch, multab, G, steer)
 
     complex(dp), intent(out) :: fi(:,:)
     integer, intent(out) :: nvec
@@ -24,7 +24,6 @@ contains
     integer, intent(in) :: elem
     complex(dp), intent(in) :: eval !! non-degenerate eigenvalue 
     integer, intent(in) :: J
-    integer, intent(in) :: kloop
     integer, intent(in) :: inel(:)
     integer, intent(in) :: cind(:)
     complex(dp), intent(in) :: ch(:,:)
@@ -33,29 +32,27 @@ contains
     integer, intent(in) :: steer(:)
 
 
-    integer :: II, I3 
-    integer :: K2, K3, K4, K5, K6
+    integer :: K2, K4, K5, K6
     integer :: nvr, IND
     integer :: nml, numl
     integer ::  LPE
     integer ::  N
     real(dp) :: rnorm
-    complex(dp) :: P
+    complex(dp) :: overlap, P
 
     integer, allocatable :: loopl(:)
     integer, allocatable :: lpstr(:)
-    real(dp), allocatable :: vec(:)
-    real(dp), allocatable :: vec2(:)
+    complex(dp), allocatable :: vec(:)
+    complex(dp), allocatable :: vec2(:)
 
     allocate(loopl(G))
     allocate(lpstr(G))
     allocate(vec(G))
     allocate(vec2(G))
 
-    if(kloop .ne. 1) then
-       call sym_permu(loopl, lpstr, numl, multab, G, inel, elem, steer)
-    end if
-    vec(:) = 0
+    call sym_permu(loopl, lpstr, numl, multab, G, inel, elem, steer)
+    fi(:, :) = cmplx(0.0_dp, 0.0_dp, kind=dp)
+    vec(:) = cmplx(0.0_dp, 0.0_dp, kind=dp)
 
     IND = 1
     nvr = 0
@@ -67,11 +64,13 @@ contains
           IND = IND + loopl(nml-1)
        end if
 
+       if (abs(eval**loopl(nml) - cmplx(1.0_dp, 0.0_dp, kind=dp)) > tol_zero) cycle
+
        nvr = nvr + 1
-       vec(:) = 0.0
+       vec(:) = cmplx(0.0_dp, 0.0_dp, kind=dp)
        K2 = lpstr(IND)
-       vec(K2) = 1
-       P = 1
+       vec(K2) = cmplx(1.0_dp, 0.0_dp, kind=dp)
+       P = cmplx(1.0_dp, 0.0_dp, kind=dp)
        P = P*eval
        LPE = IND + loopl(nml)
        do N = IND+1, LPE-1
@@ -79,11 +78,7 @@ contains
           vec(K2) = P
           P = P*eval
        end do
-       write(*,*) "degen create " , nvr, " eigenvector ", vec
        ! Projection SJ*vec
-       do K4 = 1, G
-          fi(K4, nvr) = 0
-       end do
        do K4 = 1, G
           do K5 = 1, G
              K6 = inel(K5)
@@ -94,65 +89,22 @@ contains
        end do
     end do
 
-    ! the first non-zero eigencolum is normalized
-    nvec = nvr
-    nvr = 1
-
-    do while(nvr <= nvec)
-       ! in case thera are no eigenvectors with eigenvalue eval, belonging to the Jth irreducible
-       ! subspace, set nvec= 0 and return
-       II = 1
-       do while(II <= G)
-          if(abs(fi(II, nvr)) >= 0.001) then
-             exit
-          end if
-          II = II + 1
+    nvec = 0
+    do nml = 1, nvr
+       vec2(1:G) = fi(1:G, nml)
+       do K2 = 1, nvec
+          overlap = dot_product(fi(1:G, K2), vec2(1:G))
+          vec2(1:G) = vec2(1:G) - overlap*fi(1:G, K2)
        end do
-       if( II <= G) then
-          !rnorm = norm2(fi(1:G, nvr))
-          do I3 = 1, G
-             rnorm = rnorm + fi(I3, nvr)*fi(I3, nvr)
-          end do
-          !rnorm = sum(abs(fi(1:G, nvr))*abs(fi(1:G,nvr)))
-          rnorm = 1/ sqrt(rnorm)
 
-          fi(1:G, nvr) = fi(1:G, nvr)*rnorm
-          if(nvr .gt. 1) then
-             ! orthogonalize the eigencolumns of elements elem with eigenvalue eval to each other
-             K3 = nvr - 1
-             vec(1:K3) = matmul(transpose(fi(1:G, 1:K3)), fi(1:G, nvr))
-
-             do I3 = 1, G
-                vec2(I3) = fi(I3, nvr)
-                do K2=1,K3
-                   vec2(I3) = vec2(I3) - vec(K2)*fi(I3, K2)
-                end do
-             end do
-             I3 = 1
-             do while (I3 <= G)
-                if(abs(vec2(I3)) >= 0.001) then
-                   exit
-                end if
-                I3 = I3 + 1
-             end do
-             if(I3 <= G) then
-                rnorm = norm2(vec2(1:G))
-                rnorm = 1/rnorm
-                fi(1:G, nvr) = vec2(1:G) * rnorm
-                nvr = nvr + 1
-             else
-                nvec = nvec + 1
-                fi(1:G, nvr:nvec) = fi(1:G, (nvr+1):(nvec+1))
-             end if
-          else
-             nvr = nvr + 1
-          end if
-       else
-          nvec = nvec - 1
-          fi(1:G, nvr:nvec) = fi(1:G,(nvr+1):(nvec+1))
+       rnorm = sqrt(sum(abs(vec2(1:G))**2))
+       if (rnorm > tol_zero) then
+          nvec = nvec + 1
+          fi(1:G, nvec) = vec2(1:G)/rnorm
        end if
     end do
-    !
+    if (nvec < size(fi, 2)) fi(:, nvec + 1:) = cmplx(0.0_dp, 0.0_dp, kind=dp)
+
     deallocate(loopl)
     deallocate(lpstr)
     deallocate(vec)

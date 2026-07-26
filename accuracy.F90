@@ -98,15 +98,48 @@ module accuracy
   real(dp), parameter :: tol_orthog = 1.0e-6_dp     !* Tolerance for orthogonality
   real(dp), parameter :: tol_phase = 1.0e-6_dp      !* Tolerance for phase factor comparison
   real(dp), parameter :: tol_projection = 1.0e-8_dp !* Tolerance for projection matrix validation
+  real(dp), parameter :: tol_projection_work = 100.0_dp * tol_projection
   real(dp), parameter :: tol_lattice_integer = 1.0e-6_dp
   real(dp), parameter :: tol_group_closure = 1.0e-8_dp
   real(dp), parameter :: tol_irrep_phase = 1.0e-6_dp
   real(dp), parameter :: tol_projector_trace = 1.0e-6_dp
+  real(dp), parameter :: tol_structure_symmetry = 2.0e-3_dp
+  real(dp), parameter :: tol_kpoint_membership = 2.0e-3_dp
+  real(dp), parameter :: tol_kpoint_snap = 5.0e-4_dp
+  real(dp), parameter :: tol_character_cleanup = 1.0e-4_dp
+  real(dp), parameter :: tol_rotation_match = 1.0e-5_dp
+  real(dp), parameter :: tol_eigenvalue_cluster = 1.0e-3_dp
+  real(dp), parameter :: tol_lattice_metric = 1.0e-3_dp
+  real(dp), parameter :: tol_lattice_angle_deg = 0.2_dp
+  integer, parameter :: max_projective_phase_order = 12
 
   integer, parameter :: pg_parent_oh = 0
   integer, parameter :: pg_parent_d6h = 48
 
 contains
+
+  subroutine snap_fractional_kpoint(kpoint_in, kpoint_out)
+    real(dp), intent(in) :: kpoint_in(3)
+    real(dp), intent(out) :: kpoint_out(3)
+
+    integer, parameter :: max_denominator = 12
+    integer :: component, denominator
+    real(dp) :: candidate, candidate_error, best_error
+
+    kpoint_out = kpoint_in
+    do component = 1, 3
+       best_error = tol_kpoint_snap
+       do denominator = 1, max_denominator
+          candidate = real(nint(kpoint_in(component)*denominator), kind=dp)/ &
+               real(denominator, kind=dp)
+          candidate_error = abs(kpoint_in(component) - candidate)
+          if (candidate_error < best_error) then
+             kpoint_out(component) = candidate
+             best_error = candidate_error
+          end if
+       end do
+    end do
+  end subroutine snap_fractional_kpoint
 
   integer function point_group_table_offset(point_group_number) result(offset)
     integer, intent(in) :: point_group_number

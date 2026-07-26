@@ -72,7 +72,7 @@ module constants
       &(/ "q", "x", "y", "z" /)
 
   real(dp), parameter :: c_pi = 3.14159265358979323846_dp !* $\pi$
-  complex(dp), parameter :: c_im = cmplx(0.0_dp, 1.0_dp)
+  complex(dp), parameter :: c_im = cmplx(0.0_dp, 1.0_dp, kind=dp)
 
   integer, parameter :: maxLT = 10 ! max lattice distance of tb hopping 
   integer, parameter :: mxRint= 2 ! max lattice distabce of interaction

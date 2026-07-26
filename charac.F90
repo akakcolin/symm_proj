@@ -13,29 +13,22 @@ contains
     integer, intent(in) :: p
     integer, intent(in) :: q
 
-    integer :: x, y, k
-    if( p .eq. q) then
-       lcm = p
-       return
-    else if (q .eq. 0) then
+    integer :: x, y, gcd_value, remainder
+
+    if (p == 0 .or. q == 0) then
        lcm = 0
        return
     end if
 
     x = abs(p)
     y = abs(q)
-111 continue
-    if (x .gt. y) then
-       x = mod(x, y)
-       if (x .ne. 0) go to 111
-    else if ( x .lt. y) then
-       y = mod(y, x)
-       if (y .ne. 0) go to 111
-    end if
-    
-    k = max(x, y)
-    
-    lcm = (p*q)/k
+    do while (y /= 0)
+       remainder = mod(x, y)
+       x = y
+       y = remainder
+    end do
+    gcd_value = x
+    lcm = abs((p / gcd_value) * q)
   end function lcm
   
   ! Return I modulo P, with result in [0, P-1].
@@ -43,18 +36,10 @@ contains
     implicit none
     integer, intent(in) :: I
     integer, intent(in) :: P
-    integer :: K
-    K = I
-    if (K < 0) then
-       do while (K < 0)
-          K = K + P
-       end do
-    else if (K >= P) then
-       do while (K >= P)
-          K = K - P
-       end do
+    if (P <= 0) then
+       error stop "Modulus divisor must be positive"
     end if
-    modulus = K
+    modulus = modulo(I, P)
   end function modulus
 
   ! The irreducible characters are calculated according to Dixon's method
@@ -97,7 +82,8 @@ contains
     integer :: T, X, Y, Zprim, LC, JJ, K1, nllc, NJ
     integer :: norm2
     real(dp) :: maxh 
-    real(dp) :: degen
+    integer :: degen
+    logical :: prime_found
 
 
     integer, allocatable :: nconj(:)
@@ -109,7 +95,7 @@ contains
     integer, allocatable :: mat(:,:)
     integer, allocatable :: u(:,:), v(:,:)
     integer, allocatable :: hinv(:), nordin(:)
-    real(dp), allocatable :: z(:,:) 
+    integer, allocatable :: z(:,:)
     integer, allocatable :: sqr(:)
     integer, allocatable :: minimum(:)
 
@@ -227,13 +213,22 @@ contains
 
        maxh=floor(2*sqrt(real(G))) + 1
 
-       do I = 1, 100
+       P = 0
+       prime_found = .false.
+       do I = 1, size(prime)
           NP1 = prime(I) - 1
           if((prime(I) >= maxh) .and. ((int(NP1/ex)*ex - NP1) .eq. 0)) then
              P = prime(I)
+             prime_found = .true.
              exit
           end if
        end do
+
+       if (.not. prime_found) then
+          write(*,*) "Error: no supplied prime satisfies ex divides P-1"
+          write(*,*) "Exponent ex =", ex, " candidate count =", size(prime)
+          error stop "No valid finite-field prime found"
+       end if
 
        if (steer(12) > 0) write(*,*) "The prime P, such that ex divides P-1 is ", P
        ! section 4
@@ -268,7 +263,7 @@ contains
        allocate(ind(M))
        allocate(nup(ex))
        allocate(inv(M))
-       allocate(sqr(520))
+       allocate(sqr(P))
        sqr(:) = 0
        ind(:)=0
        nup(:)= 0
@@ -574,7 +569,7 @@ contains
                 ! The zeroth power of Z is 1, so the first term in the addition is 1*v(I1,1)
                 do L1 = 2, M
                    if( v(I1, L1) .ne. 0) then
-                      croot =cmplx(0, pi2*(L1-1)/M)
+                      croot = cmplx(0.0_dp, pi2*(L1-1)/M, kind=dp)
                       croot = exp(croot)
                       ch(K, I1) = ch(K, I1) + croot*v(I1, L1)
                    end if
@@ -582,10 +577,10 @@ contains
              else
                 ch(K, 1) = lj(K)
              end if
-             if (abs(aimag(ch(K, I1))) < 0.0001) then
+             if (abs(aimag(ch(K, I1))) < tol_character_cleanup) then
                 ch(K, I1) = real(ch(K, I1))
              end if
-             if (abs(ch(K, I1)) < 0.0001) then
+             if (abs(ch(K, I1)) < tol_character_cleanup) then
                 ch(K, I1) = 0
              end if
           end do
@@ -635,5 +630,3 @@ contains
   end subroutine sym_charac
 
 end module charac
-
-

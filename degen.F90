@@ -11,7 +11,7 @@ module degen
 contains
 
   integer function fix(a)
-    real, intent(in) :: a
+    real(dp), intent(in) :: a
 
     if(a>0) then
        fix = floor(a)
@@ -61,16 +61,16 @@ contains
     integer :: KI, K1, K2, K3, K4, K5, K6, K11
     integer :: J1, J2, J3, J4, J7, LG, nvru
     integer :: L1, L2, ML1, ML2, nvr, K111
-    integer :: kloop, nvr1, nvr2
-    integer :: D, dprim, isec
+    integer :: nvr1, nvr2
+    integer :: isec
 
     real(dp) :: rinab
     real(dp) :: rnorm, rnorm2
     complex(dp) :: pi2i
     complex(dp) :: RIN
     integer, allocatable :: ntry1(:), ntry2(:), ntry3(:), ntry4(:)
-    real(dp), allocatable :: vec(:)
-    real(dp), allocatable:: eigenv(:)
+    complex(dp), allocatable :: vec(:)
+    complex(dp), allocatable :: eigenv(:)
     complex(dp), allocatable :: dfi(:,:)
 
     allocate(ntry1(G))
@@ -87,16 +87,15 @@ contains
 ! a common set of mutual independent commuting group elements and specifies
 ! a unique common eigencolumn, if possible. 
 
-    pi2i = cmplx(0, 2*pi)
+    pi2i = cmplx(0.0_dp, 2*pi, kind=dp)
     
-    kloop = 0
+    isec = 0
   
-    call sym_eigvec(fi, nvr1, IN, lab, J, kloop, inel, cind, ch, multab, G, steer)
+    call sym_eigvec(fi, nvr1, IN, lab, J, inel, cind, ch, multab, G, steer)
     
     if (nvr1 > 0) then
-       D = fix(real(nvr1/LJ1))
+       isec = nvr1
        dfi(1:nvr1, 1:G) = transpose(fi(1:G, 1:nvr1))
-       write (*,*) "dfi(1:nvr1, 1:G)", dfi(1:nvr1, 1:G)
        ! calucate a set of mutual independent, commuting group elements to element IN
        ntry2(:) = 0
        I2 = 1
@@ -175,10 +174,8 @@ contains
              eigenv(K4) = exp(pi2i*(K4 - 1)/ K3)
           end do
           do K4 = 1, K3
-             kloop = 0
              RIN = eigenv(K4)
-             call sym_eigvec(fi, nvr2, K2, RIN, J, kloop, inel, cind, ch, multab, G, steer)
-             kloop = 1
+             call sym_eigvec(fi, nvr2, K2, RIN, J, inel, cind, ch, multab, G, steer)
              if (nvr2 .ne. 0) then
                 call sym_intsec(fi, isec, nvr1, nvr2, G, dfi)
                 if (isec .ne. 0) then
@@ -201,6 +198,9 @@ contains
        end if
     else
        write(*,*) "No commuting element for element ", IN
+       LJ1 = 0
+       deallocate(dfi, vec, eigenv, ntry1, ntry2, ntry3, ntry4)
+       return
     end if
 
     if (isec .ne. LJ1) then
@@ -240,16 +240,15 @@ contains
              end do
              I4 = 1
              do while ( I4 <= IV)
-                rin = dot_product(vec(1:G), dfi(I4, 1:G))
+                rin = dot_product(dfi(I4, 1:G), vec(1:G))
                 rinab = abs(rin)
-                if(abs(rinab - 1) >= 0.000001) then
-                   if (rinab >= 0.000001) then
+                if(abs(rinab - 1) >= tol_orthog) then
+                   if (rinab >= tol_orthog) then
                       do K4 = 1, G
                          vec(K4) = vec(K4) - rin*dfi(I4, K4)
                       end do
-                      rnorm = dot_product(vec(1:G), vec(1:G))
-                      !rnorm = sum ( vec(1:G)*vec(1:G))
-                      if (rnorm < 0.000001) then
+                      rnorm = sum(abs(vec(1:G))**2)
+                      if (rnorm < tol_orthog) then
                          exit
                       end if
                       rnorm2 = 1/sqrt(rnorm)

@@ -1,6 +1,7 @@
 module sumsets
   use accuracy
   use constants
+  use sympw_group_mode, only: projective_factor_group_active
   implicit none
   private
   public :: sym_sumsets
@@ -16,7 +17,8 @@ contains
   ! nvec(1:nel,1:nat(I1),1:nat(I1),1:np(1:nel,1:nat(I1),1:nat(I1)),1:3)
   ! gives the corresponding lattice vectors.
   
-  subroutine sym_sumsets( np, nvec, npl, til, kgord, kgel, rgr, listp, a, ai, b, r, u, nel, nat, ksym, ibz, steer)
+  subroutine sym_sumsets( np, nvec, npl, til, kgord, kgel, rgr, listp, a, ai, b, r, u, nel, nat, ksym, ibz, steer, &
+       success)
     integer, intent(inout) :: np(:,:,:)
     real(dp), intent(inout) :: nvec(:,:,:,:,:)
     integer, intent(inout) :: npl(:,:,:,:)
@@ -31,16 +33,18 @@ contains
     integer, intent(in) :: kgord
     integer, intent(in) :: kgel(:)
     integer, intent(in) :: listp(:)
+    logical, intent(out), optional :: success
   
 
-    real(dp), dimension(3) :: difi, dif, trac
+    real(dp), dimension(3) :: trac
 
-    integer :: I, I1, I2, I3, I4, I5, I6, I7, I8, II 
-    integer :: J, isign, K, ifd
+    integer :: I, I1, I2, I3, I4, I5, I6, I7
+    integer :: J, K
     integer :: match_atom
     integer :: match_count
-    real(dp) ::  D
     real(dp), dimension(3) :: mapped_shift
+
+    if (present(success)) success = .true.
 
     !allocate(nvec(nel, nat(I1), nat(I1),tmp_dim, 3))
 
@@ -62,10 +66,9 @@ contains
              I3 = I2
 
              ! inverse point group operator
-             if (.not. ((steer(20) .ne. 0) .or. (ksym .ne. 0) .or. (ibz .ne. 0))) then
+             if (projective_factor_group_active(steer(20), ksym, ibz)) then
                 I4 = listp(I3)
                 I4 = kgel(I4)
-                !need to check 
                 trac(1:3) = matmul(transpose(a(1:3, 1:3)), til(I2,1:3))
                 ! nonprimitive translations in cartesian coordinates
              else
@@ -83,11 +86,19 @@ contains
                 end do
              end do
 
-             call find_unique_atom_mapping(trac, r(:, I, 1:J), J, ai, tol_lattice_integer, &
-                  & match_atom, mapped_shift, match_count)
+             call find_unique_atom_mapping(trac, r, I, J, ai, tol_structure_symmetry, &
+                  match_atom, mapped_shift, match_count)
 
              if (match_count /= 1) then
-                write(*,*) "Wrong space group or ambiguous atom mapping", I, I1, I2, I4
+                if (match_count == 0) then
+                   write(*,*) "No atom mapping found", I, I1, I2, I4
+                else
+                   write(*,*) "Ambiguous atom mapping", I, I1, I2, I4, match_count
+                end if
+                if (present(success)) then
+                   success = .false.
+                   return
+                end if
                 error stop "Invalid atom mapping"
              end if
 
@@ -104,10 +115,11 @@ contains
 
   end subroutine sym_sumsets
 
-  subroutine find_unique_atom_mapping(trac, atom_positions, nat_this, ai, tol, match_atom, mapped_shift, match_count)
+  subroutine find_unique_atom_mapping(trac, atom_positions, element_index, nat_this, &
+       ai, tol, match_atom, mapped_shift, match_count)
     real(dp), intent(in) :: trac(3)
-    real(dp), intent(in) :: atom_positions(3, nat_this)
-    integer, intent(in) :: nat_this
+    integer, intent(in) :: element_index, nat_this
+    real(dp), intent(in) :: atom_positions(:,:,:)
     real(dp), intent(in) :: ai(3,3)
     real(dp), intent(in) :: tol
     integer, intent(out) :: match_atom
@@ -122,9 +134,12 @@ contains
     match_atom = 0
     match_count = 0
     mapped_shift(:) = 0
+    if (size(atom_positions, 1) < 3 .or. element_index < 1 .or. &
+         element_index > size(atom_positions, 2) .or. nat_this < 1 .or. &
+         nat_this > size(atom_positions, 3)) return
 
     do atom_index = 1, nat_this
-       dif(:) = trac(:) - atom_positions(:, atom_index)
+       dif(:) = trac(:) - atom_positions(:, element_index, atom_index)
        candidate_shift(:) = 0
        is_match = .true.
 
@@ -141,20 +156,9 @@ contains
           if (match_count == 1) then
              match_atom = atom_index
              mapped_shift(:) = nint(candidate_shift(:))
-          else
-             write(*,*) "Ambiguous atom mapping detected"
-             write(*,*) " target position: ", trac(:)
-             write(*,*) " atom index candidates: ", match_atom, atom_index
-             error stop "Ambiguous atom mapping"
           end if
        end if
     end do
-
-    if (match_count == 0) then
-       write(*,*) "No atom mapping found"
-       write(*,*) " target position: ", trac(:)
-       error stop "Missing atom mapping"
-    end if
   end subroutine find_unique_atom_mapping
 
   ! ============================================
@@ -176,9 +180,9 @@ contains
   !
   ! The identity operation always has τ = 0.
   ! ============================================
-  subroutine detect_nonprimitive_translations(u, r, a, ai, rgr3, gel, order, pgnr, nel, nat)
+  subroutine detect_nonprimitive_translations(u, r, a, ai, rgr3, gel, order, pgnr, nel, nat, success)
     real(dp), intent(out) :: u(:,:)
-    real(dp), intent(in)  :: r(:,:,:)
+    real(dp), intent(inout) :: r(:,:,:)
     real(dp), intent(in)  :: a(3,3)
     real(dp), intent(in)  :: ai(3,3)
     real(dp), intent(in)  :: rgr3(3,3,72)
@@ -187,16 +191,18 @@ contains
     integer,  intent(in)  :: pgnr
     integer,  intent(in)  :: nel
     integer,  intent(in)  :: nat(:)
+    logical, intent(out), optional :: success
 
     integer  :: ig, ielem, iatom, jatom, ref_atom
     real(dp) :: r_ref(3), r_rot(3), f_rot(3), f_j(3), f_diff(3), tau(3)
-    real(dp) :: tau_tmp(3)
+    real(dp) :: origin_shift(3), origin_shift_cart(3)
     integer  :: rt_idx
     real(dp) :: rot(3,3)
     real(dp), allocatable :: rot_all(:,:,:), u_try(:,:)
-    logical  :: found, cocycle_ok
+    logical  :: found, cocycle_ok, origin_found
     integer  :: max_nat, num_ref_atoms
 
+    if (present(success)) success = .true.
     u(:,:) = 0.0_dp
 
     ! Identity (position 1) always has zero translation
@@ -258,9 +264,21 @@ contains
        ! Each {R|tau} has been verified against every atom. The set is
        ! physically usable only if the operations also satisfy the space-group
        ! cocycle relation under multiplication.
-       cocycle_ok = check_cocycle(u_try, rot_all, a, ai, order, tol_lattice_integer)
+       cocycle_ok = check_cocycle(u_try, rot_all, a, ai, order, tol_structure_symmetry)
        if (cocycle_ok) then
-          u(:,:) = u_try(:,:)
+          call find_symmorphic_origin(u_try, rot_all, a, ai, order, &
+               tol_structure_symmetry, origin_shift, origin_found)
+          if (origin_found) then
+             origin_shift_cart = matmul(transpose(a), origin_shift)
+             do ielem = 1, nel
+                do iatom = 1, nat(ielem)
+                   r(:, ielem, iatom) = r(:, ielem, iatom) - origin_shift_cart
+                end do
+             end do
+             u(:,:) = 0.0_dp
+          else
+             u(:,:) = u_try(:,:)
+          end if
           deallocate(rot_all, u_try)
           return
        end if
@@ -268,6 +286,11 @@ contains
 
     ! No reference atom gave consistent τ values
     deallocate(rot_all, u_try)
+
+    if (present(success)) then
+       success = .false.
+       return
+    end if
 
     write(*,*) ""
     write(*,*) "=========================================="
@@ -322,7 +345,7 @@ contains
             do ja = 1, nat_in(el)
                f_target = matmul(ai_lat, r_pos(:, el, ja))
                diff_frac(:) = f_img(:) - f_target(:)
-               if (all(abs(diff_frac - nint(diff_frac)) < tol_lattice_integer)) then
+               if (all(abs(diff_frac - nint(diff_frac)) < tol_structure_symmetry)) then
                   match_cnt = match_cnt + 1
                end if
             end do
@@ -365,7 +388,7 @@ contains
             found_k = .false.
             do k = 1, ord
                rot_diff = rot_prod - rot_loc(:,:,k)
-               if (maxval(abs(rot_diff)) < 1.0e-5_dp) then
+               if (maxval(abs(rot_diff)) < tol_rotation_match) then
                   mtab_loc(i, j) = k
                   found_k = .true.
                   exit
@@ -404,6 +427,42 @@ contains
 
       deallocate(mtab_loc)
     end function check_cocycle
+
+    subroutine find_symmorphic_origin(u_loc, rot_loc, a_lat, ai_lat, ord, tol, origin, found_origin)
+      real(dp), intent(in) :: u_loc(:,:)
+      real(dp), intent(in) :: rot_loc(:,:,:)
+      real(dp), intent(in) :: a_lat(3,3), ai_lat(3,3)
+      integer, intent(in) :: ord
+      real(dp), intent(in) :: tol
+      real(dp), intent(out) :: origin(3)
+      logical, intent(out) :: found_origin
+
+      ! Denominator 24 covers crystallographic origin shifts generated by 2-, 3-, 4-, and 6-fold operations.
+      integer, parameter :: origin_grid = 24
+      integer :: group_index, ix, iy, iz
+      real(dp) :: rotation_fractional(3,3), shifted_translation(3)
+
+      found_origin = .false.
+      origin(:) = 0.0_dp
+      do ix = 0, origin_grid - 1
+         do iy = 0, origin_grid - 1
+            do iz = 0, origin_grid - 1
+               origin = real([ix, iy, iz], kind=dp)/real(origin_grid, kind=dp)
+               do group_index = 1, ord
+                  rotation_fractional = matmul(ai_lat, &
+                       matmul(rot_loc(:,:,group_index), transpose(a_lat)))
+                  shifted_translation = u_loc(group_index,:) + &
+                       matmul(rotation_fractional, origin) - origin
+                  if (any(abs(shifted_translation - nint(shifted_translation)) > tol)) exit
+               end do
+               if (group_index > ord) then
+                  found_origin = .true.
+                  return
+               end if
+            end do
+         end do
+      end do
+    end subroutine find_symmorphic_origin
 
   end subroutine detect_nonprimitive_translations
 

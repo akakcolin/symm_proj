@@ -25,7 +25,7 @@ contains
   !repres; otherwise a call is made to function mgt.
   subroutine sym_subsp(dfi, nvr, kelem, nvct, J, LJ1, G, inel, multab, steer, cind, ch, norder)
     complex(dp), intent(inout) :: dfi(:,:)
-    integer, intent(out) :: nvr
+    integer, intent(inout) :: nvr
 
     integer, intent(in) :: kelem(:)
     integer, intent(in) :: nvct
@@ -39,20 +39,20 @@ contains
     complex(dp), intent(in) :: ch(:,:)
     integer, intent(in) :: norder(:)
 
-    integer :: I, II, I1, I2, III
+    integer :: I, II, I1, III
     integer :: J1, J2
     integer :: N, L, K, K1, K2, K5
-    integer :: kloop, nvr1, nvr2 
+    integer :: nvr1, nvr2
     real(dp) :: delta_wr
-    real(dp) :: rin 
+    complex(dp) :: rin
     complex(dp) :: LAB
     complex(dp) :: pi2i
     integer, allocatable :: ninv(:)
-    real(dp), allocatable :: vec(:)
-    real(dp), allocatable :: vec2(:)
-    real(dp), allocatable :: subm(:,:)
-    real(dp), allocatable :: vr(:,:), vl(:,:)
-    real(dp), allocatable :: eigenv(:)
+    complex(dp), allocatable :: vec(:)
+    complex(dp), allocatable :: vec2(:)
+    complex(dp), allocatable :: subm(:,:)
+    complex(dp), allocatable :: vr(:,:), vl(:,:)
+    complex(dp), allocatable :: eigenv(:)
     complex(dp), allocatable :: wr(:)
     complex(dp), allocatable :: fi(:,:)
 
@@ -65,20 +65,18 @@ contains
     allocate(wr(nvr))
     allocate(vr(nvr, nvr))
     allocate(vl(nvr, nvr))
-    allocate(eigenv(nvr))
+    allocate(eigenv(G))
 
-    pi2i = cmplx(0, 2*pi)
+    pi2i = cmplx(0.0_dp, 2*pi, kind=dp)
     N=0
     I=1
     nvr1 = nvr
     
-    ninv(:) = 0.0
+    ninv(:) = 0
     
     ! Operate with the regular representatives on the eigenspace dfi(1:nvr, 1:G)
     ! to decide for which operators, except those in kelem(1:nvct)
     ! dfi(1:nvr, 1:G) is an invariant subspace
-    write(*,*) "subsp 80 lines"
-    
     do L =1, G
        if(kelem(I) .ne. L) then
           do J1=1, nvr1
@@ -97,8 +95,8 @@ contains
                 vec(I1) = rin
              end do
              I1 = 1
-             do while(I1 < G)
-                if(abs(vec(I1)) >= 0.001) then 
+             do while(I1 <= G)
+                if(abs(vec(I1)) >= tol_orthog) then
                    exit
                 end if
                 I1 = I1 + 1
@@ -107,7 +105,6 @@ contains
                 exit
              end if
           end do
-          write(*,*) "subsp 110 lines"
           if(I1 > G) then
              N = N + 1
              ninv(N) = L
@@ -129,32 +126,15 @@ contains
              end do
 
              do III=1, nvr1
-                subm(III, I1) = dot_product(conjg(dfi(III, 1:G)), vec(1:G))
+                subm(III, I1) = dot_product(dfi(III, 1:G), vec(1:G))
              end do
              !subm(1:nvr1, I1) = matmul(conjg(dfi(1:nvr1, 1:G)), transpose(vec(1:G)) 
           end do
 
-          write(*,*) "geev"
-          write(*,*) "subm", subm
-          
           call geev(subm, wr, vr, vl)
-          write(*,*) "wr"
-          write(*,*) wr
-          write(*,*) "vr"
-          write(*,*) vr
-          write(*,*) "vl"
-          write(*,*) vl
-          write(*,*) "end geev"
-          I1 = 1
-          do while(I1 <= (nvr1-1))
-             I2 = I1 + 1
-             delta_wr = abs(wr(I1) - wr(I2))
-             if (delta_wr > 0.001) then
-                exit
-             end if
-             I1 = I1 + 1
-          end do
-          if(I1 < nvr1) then
+          delta_wr = 0.0_dp
+          if (nvr1 > 1) delta_wr = maxval(abs(wr(2:nvr1) - wr(1)))
+          if(delta_wr > tol_orthog) then
              K2 = cind(K)
              K2 = norder(K2)
              do I1 = 1, K2
@@ -162,15 +142,14 @@ contains
              end do
              J1 = 1
              do while( J1 <= K2)
-                if(abs(wr(1) - eigenv(J1)) < 0.001) then
+                if(abs(wr(1) - eigenv(J1)) < tol_eigenvalue_cluster) then
                    LAB = eigenv(J1)
                    exit
                 end if
                 J1 = J1 + 1
              end do
              if (J1 <= K2) then
-                kloop = 0
-                call sym_eigvec(fi, nvr2, K, LAB, J, kloop, inel, cind, ch, multab, G, steer)
+                call sym_eigvec(fi, nvr2, K, LAB, J, inel, cind, ch, multab, G, steer)
                 call sym_intsec(fi, K5, nvr1, nvr2, G, dfi)
                 ![fi, nvr2] = eigvec
                 ![f1, k5] = intsec(nvr1, nvr2, G, fi, dfi)
@@ -199,7 +178,3 @@ contains
     deallocate(fi)
   end subroutine sym_subsp
 end module subsp
-
-
-
-

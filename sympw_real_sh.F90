@@ -223,7 +223,7 @@ contains
 
     ! In a real spherical-harmonic basis, tiny imaginary parts are numerical
     ! roundoff for real projectors; keep genuinely complex matrices unchanged.
-    if (maxval(abs(aimag(Pr(1:N, 1:N)))) < 100.0_dp * tol_projection) then
+    if (maxval(abs(aimag(Pr(1:N, 1:N)))) < tol_projection_work) then
        Pr(1:N, 1:N) = cmplx(real(Pr(1:N, 1:N), dp), 0.0_dp, dp)
     end if
 

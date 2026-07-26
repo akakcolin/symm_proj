@@ -193,7 +193,7 @@ contains
           if ((M1 + M2) > 0) then
              L2 = L - M2 + 1
           end if
-          D(K1, K2) = cmplx(0,0)
+          D(K1, K2) = cmplx(0.0_dp, 0.0_dp, kind=dp)
           do I1 = L1, L2
              I = I1 - 1
              T = 1.0
@@ -223,8 +223,8 @@ contains
              T = T*Q1*Q2
              D(K1, K2) = D(K1, K2) + T
           end do
-          afi = cmplx(0, -M1*fi)
-          apsi =cmplx(0, -M2*psi)
+          afi = cmplx(0.0_dp, -M1*fi, kind=dp)
+          apsi = cmplx(0.0_dp, -M2*psi, kind=dp)
           D(K1,K2) = D(K1, K2)*exp(afi+apsi)
        end do
     end do

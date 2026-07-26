@@ -23,7 +23,7 @@ module vasp_reader
 contains
 
   subroutine read_poscar(filename, comment, scale, lattice, elements, &
-                        nat_per_elem, positions, is_cartesian, nel, total_atoms)
+                        nat_per_elem, positions, is_cartesian, nel, total_atoms, error_code)
     character(len=*), intent(in) :: filename
     character(len=256), intent(out) :: comment
     real(dp), intent(out) :: scale
@@ -33,32 +33,77 @@ contains
     real(dp), allocatable, intent(out) :: positions(:,:)
     logical, intent(out) :: is_cartesian
     integer, intent(out) :: nel, total_atoms
+    integer, optional, intent(out) :: error_code
 
-    integer :: fh, ios, i, j, atom_idx
+    integer :: fh, ios, i
     character(len=256) :: line
     character(len=1) :: coord_type
+    real(dp) :: raw_volume, scale_factor
+    logical :: file_open
 
-    fh = 10
-    open(fh, file=filename, status='old', action='read', iostat=ios)
+    if (present(error_code)) error_code = 0
+    comment = ''
+    scale = 0.0_dp
+    lattice(:, :) = 0.0_dp
+    is_cartesian = .false.
+    nel = 0
+    total_atoms = 0
+    file_open = .false.
+
+    open(newunit=fh, file=filename, status='old', action='read', iostat=ios)
     if (ios /= 0) then
-       write(*,*) "Error: Cannot open POSCAR file: ", trim(filename)
-       error stop
+       call report_poscar_error(1, "Cannot open POSCAR file: "//trim(filename))
+       return
     end if
+    file_open = .true.
 
     ! Line 1: Comment
-    read(fh, '(A)') comment
+    read(fh, '(A)', iostat=ios) comment
+    if (ios /= 0) then
+       call report_poscar_error(2, "POSCAR is missing the comment line")
+       return
+    end if
 
     ! Line 2: Scale factor
-    read(fh, *) scale
+    read(fh, *, iostat=ios) scale
+    if (ios /= 0) then
+       call report_poscar_error(3, "POSCAR scale factor is missing or invalid")
+       return
+    end if
 
     ! Lines 3-5: Lattice vectors
     do i = 1, 3
-       read(fh, *) lattice(i, 1:3)
-       lattice(i, :) = lattice(i, :) * scale
+       read(fh, *, iostat=ios) lattice(i, 1:3)
+       if (ios /= 0) then
+          call report_poscar_error(4, "POSCAR lattice vectors are incomplete or invalid")
+          return
+       end if
     end do
 
+    raw_volume = abs(lattice(1,1) * (lattice(2,2) * lattice(3,3) - lattice(2,3) * lattice(3,2)) - &
+         lattice(1,2) * (lattice(2,1) * lattice(3,3) - lattice(2,3) * lattice(3,1)) + &
+         lattice(1,3) * (lattice(2,1) * lattice(3,2) - lattice(2,2) * lattice(3,1)))
+    if (raw_volume <= tol_equal) then
+       call report_poscar_error(5, "POSCAR lattice has zero volume")
+       return
+    end if
+    if (abs(scale) <= tol_equal) then
+       call report_poscar_error(6, "POSCAR scale factor must be nonzero")
+       return
+    else if (scale < 0.0_dp) then
+       scale_factor = (abs(scale) / raw_volume)**(1.0_dp / 3.0_dp)
+    else
+       scale_factor = scale
+    end if
+    lattice(:, :) = lattice(:, :) * scale_factor
+    scale = scale_factor
+
     ! Line 6: Element names
-    read(fh, '(A)') line
+    read(fh, '(A)', iostat=ios) line
+    if (ios /= 0 .or. len_trim(line) == 0) then
+       call report_poscar_error(7, "POSCAR element-name line is missing")
+       return
+    end if
     ! Count elements
     nel = 0
     do i = 1, len_trim(line)
@@ -67,24 +112,49 @@ contains
        end if
     end do
 
+    if (nel < 1) then
+       call report_poscar_error(7, "POSCAR must contain at least one element")
+       return
+    end if
+
     allocate(elements(nel))
-    read(line, *) elements(:)
+    read(line, *, iostat=ios) elements(:)
+    if (ios /= 0) then
+       call report_poscar_error(7, "POSCAR element-name line is invalid")
+       return
+    end if
 
     ! Line 7: Number of atoms per element
     allocate(nat_per_elem(nel))
-    read(fh, *) nat_per_elem(:)
+    read(fh, *, iostat=ios) nat_per_elem(:)
+    if (ios /= 0) then
+       call report_poscar_error(8, "POSCAR atom-count line is missing or invalid")
+       return
+    end if
+    if (any(nat_per_elem <= 0)) then
+       call report_poscar_error(8, "POSCAR atom counts must be positive")
+       return
+    end if
 
     total_atoms = sum(nat_per_elem)
 
     ! Line 8: Coordinate type (Selective dynamics or Direct/Cartesian)
-    read(fh, '(A)') line
+    read(fh, '(A)', iostat=ios) line
+    if (ios /= 0 .or. len_trim(line) == 0) then
+       call report_poscar_error(9, "POSCAR coordinate mode is missing")
+       return
+    end if
     line = adjustl(line)
     coord_type = line(1:1)
 
     ! Check if Selective dynamics
     if (coord_type == 'S' .or. coord_type == 's') then
        ! Skip selective dynamics line, read next line for coord type
-       read(fh, '(A)') line
+       read(fh, '(A)', iostat=ios) line
+       if (ios /= 0 .or. len_trim(line) == 0) then
+          call report_poscar_error(9, "POSCAR coordinate mode is missing after Selective dynamics")
+          return
+       end if
        line = adjustl(line)
        coord_type = line(1:1)
     end if
@@ -92,13 +162,24 @@ contains
     is_cartesian = (coord_type == 'C' .or. coord_type == 'c' .or. &
                     coord_type == 'K' .or. coord_type == 'k')
 
+    if (.not. (coord_type == 'D' .or. coord_type == 'd' .or. is_cartesian)) then
+       call report_poscar_error(9, "POSCAR coordinate mode must be Direct or Cartesian")
+       return
+    end if
+
     ! Read atomic positions
     allocate(positions(total_atoms, 3))
     do i = 1, total_atoms
-       read(fh, *) positions(i, 1:3)
+       read(fh, *, iostat=ios) positions(i, 1:3)
+       if (ios /= 0) then
+          call report_poscar_error(10, "POSCAR atomic positions are incomplete or invalid")
+          return
+       end if
     end do
+    if (is_cartesian) positions(:, :) = positions(:, :) * scale_factor
 
     close(fh)
+    file_open = .false.
 
     write(*,*) "=========================================="
     write(*,*) "Read POSCAR: ", trim(comment)
@@ -117,92 +198,155 @@ contains
     end if
     write(*,*)
 
+  contains
+
+    subroutine report_poscar_error(code, message)
+      integer, intent(in) :: code
+      character(len=*), intent(in) :: message
+      integer :: close_ios
+
+      if (file_open) then
+         close(fh, iostat=close_ios)
+         file_open = .false.
+      end if
+      if (allocated(elements)) deallocate(elements)
+      if (allocated(nat_per_elem)) deallocate(nat_per_elem)
+      if (allocated(positions)) deallocate(positions)
+      nel = 0
+      total_atoms = 0
+      if (present(error_code)) then
+         error_code = code
+         write(*,*) "Error: ", trim(message)
+      else
+         write(*,*) "Error: ", trim(message)
+         error stop
+      end if
+    end subroutine report_poscar_error
+
   end subroutine read_poscar
 
-  subroutine read_kpoints(filename, kpoints, kpoint_names, nkpts, kpt_mode, kpoints_are_cartesian)
+  subroutine read_kpoints(filename, kpoints, kpoint_names, nkpts, kpt_mode, &
+       kpoints_are_cartesian, error_code)
     character(len=*), intent(in) :: filename
     real(dp), allocatable, intent(out) :: kpoints(:,:)
     character(len=20), allocatable, intent(out) :: kpoint_names(:)
     integer, intent(out) :: nkpts
     character(len=20), intent(out) :: kpt_mode
     logical, optional, intent(out) :: kpoints_are_cartesian
+    integer, optional, intent(out) :: error_code
 
     integer :: fh, ios, i
     character(len=256) :: line, comment
     character(len=1) :: coord_type
-    logical :: cartesian_mode
+    real(dp) :: coordinate_probe(3)
+    logical :: cartesian_mode, file_open
 
-    fh = 11
     coord_type = 'R'
     cartesian_mode = .false.
+    file_open = .false.
+    nkpts = 0
+    kpt_mode = ''
+    if (present(kpoints_are_cartesian)) kpoints_are_cartesian = .false.
+    if (present(error_code)) error_code = 0
 
-    open(fh, file=filename, status='old', action='read', iostat=ios)
+    open(newunit=fh, file=filename, status='old', action='read', iostat=ios)
     if (ios /= 0) then
-       write(*,*) "Error: Cannot open KPOINTS file: ", trim(filename)
-       error stop
+       call report_kpoints_error(1, "Cannot open KPOINTS file: "//trim(filename))
+       return
     end if
+    file_open = .true.
 
     ! Line 1: Comment
-    read(fh, '(A)') comment
-
-    ! Line 2: Number of k-points (0 = automatic)
-    read(fh, *) nkpts
-
-    ! Line 3: Mode (Automatic, Gamma, Monkhorst-Pack, or Line-mode)
-    read(fh, '(A)') line
-    line = adjustl(line)
-    kpt_mode = trim(line)
-
-    if (nkpts == 0) then
-       ! Automatic k-point generation
-       write(*,*) "Warning: Automatic k-point generation not supported"
-       write(*,*) "Please use explicit k-points"
-       nkpts = 1
-       allocate(kpoints(1, 3))
-       allocate(kpoint_names(1))
-       kpoints(1, :) = [0.0_dp, 0.0_dp, 0.0_dp]
-       kpoint_names(1) = "Gamma"
-    else
-       ! Explicit k-points
-       ! Line 4: Coordinate type (optional)
-       read(fh, '(A)', iostat=ios) line
-       if (ios == 0) then
-          line = adjustl(line)
-          coord_type = line(1:1)
-          ! If it's a coordinate type line, read it
-          if (coord_type == 'R' .or. coord_type == 'r') then
-             cartesian_mode = .false.
-          else if (coord_type == 'C' .or. coord_type == 'c' .or. &
-                   coord_type == 'K' .or. coord_type == 'k') then
-             cartesian_mode = .true.
-          else
-             ! It's actually the first k-point, backspace
-             coord_type = 'R'
-             cartesian_mode = .false.
-             backspace(fh)
-          end if
-       else
-          backspace(fh)
-       end if
-
-       allocate(kpoints(nkpts, 3))
-       allocate(kpoint_names(nkpts))
-
-       do i = 1, nkpts
-          read(fh, '(A)') line
-          ! Try to read k-point with optional name
-          read(line, *, iostat=ios) kpoints(i, 1:3)
-
-          ! Try to extract name from comment
-          if (index(line, '!') > 0) then
-             kpoint_names(i) = adjustl(line(index(line, '!')+1:))
-          else
-             write(kpoint_names(i), '(A,I0)') "K", i
-          end if
-       end do
+    read(fh, '(A)', iostat=ios) comment
+    if (ios /= 0) then
+       call report_kpoints_error(2, "KPOINTS is missing the comment line")
+       return
     end if
 
+    ! Line 2: Number of k-points (0 = automatic)
+    read(fh, *, iostat=ios) nkpts
+    if (ios /= 0) then
+       call report_kpoints_error(3, "KPOINTS point count is missing or invalid")
+       return
+    end if
+    if (nkpts == 0) then
+       call report_kpoints_error(3, "Automatic KPOINTS meshes are not supported; provide explicit k-points")
+       return
+    else if (nkpts < 0) then
+       call report_kpoints_error(3, "KPOINTS point count must be positive")
+       return
+    end if
+
+    ! Line 3: Coordinate type for an explicit list, or Line-mode.
+    read(fh, '(A)', iostat=ios) line
+    if (ios /= 0 .or. len_trim(line) == 0) then
+       call report_kpoints_error(4, "KPOINTS coordinate mode is missing")
+       return
+    end if
+    line = adjustl(line)
+    kpt_mode = trim(line)
+    coord_type = line(1:1)
+    if (coord_type == 'L' .or. coord_type == 'l') then
+       call report_kpoints_error(4, "KPOINTS Line-mode is not supported; provide explicit k-points")
+       return
+    else if (coord_type == 'R' .or. coord_type == 'r') then
+       cartesian_mode = .false.
+    else if (coord_type == 'C' .or. coord_type == 'c' .or. &
+             coord_type == 'K' .or. coord_type == 'k') then
+       cartesian_mode = .true.
+    else if (coord_type == 'G' .or. coord_type == 'g' .or. &
+             coord_type == 'M' .or. coord_type == 'm' .or. &
+             coord_type == 'A' .or. coord_type == 'a') then
+       call report_kpoints_error(4, "Automatic KPOINTS modes are not supported; provide explicit k-points")
+       return
+    else
+       read(line, *, iostat=ios) coordinate_probe(:)
+       if (ios /= 0) then
+          call report_kpoints_error(4, &
+               "KPOINTS coordinate mode must be Reciprocal or Cartesian")
+          return
+       end if
+       kpt_mode = "Reciprocal"
+       cartesian_mode = .false.
+       backspace(fh, iostat=ios)
+       if (ios /= 0) then
+          call report_kpoints_error(5, "Unable to reread the first implicit Reciprocal k-point")
+          return
+       end if
+    end if
+
+    allocate(kpoints(nkpts, 3), stat=ios)
+    if (ios /= 0) then
+       call report_kpoints_error(6, "KPOINTS coordinate allocation failed")
+       return
+    end if
+    allocate(kpoint_names(nkpts), stat=ios)
+    if (ios /= 0) then
+       call report_kpoints_error(6, "KPOINTS name allocation failed")
+       return
+    end if
+
+    do i = 1, nkpts
+       read(fh, '(A)', iostat=ios) line
+       if (ios /= 0) then
+          call report_kpoints_error(5, "KPOINTS explicit coordinate list is incomplete")
+          return
+       end if
+       read(line, *, iostat=ios) kpoints(i, 1:3)
+       if (ios /= 0) then
+          call report_kpoints_error(5, "Invalid explicit KPOINTS coordinate line")
+          return
+       end if
+
+       if (index(line, '!') > 0) then
+          kpoint_names(i) = adjustl(line(index(line, '!')+1:))
+       else
+          write(kpoint_names(i), '(A,I0)') "K", i
+       end if
+    end do
+
     close(fh)
+    file_open = .false.
 
     if (present(kpoints_are_cartesian)) then
        kpoints_are_cartesian = cartesian_mode
@@ -222,6 +366,31 @@ contains
        write(*,'(A,3F10.4,2X,A)') "  ", kpoints(i,:), trim(kpoint_names(i))
     end do
     write(*,*)
+
+  contains
+
+    subroutine report_kpoints_error(code, message)
+      integer, intent(in) :: code
+      character(len=*), intent(in) :: message
+      integer :: close_ios
+
+      if (file_open) then
+         close(fh, iostat=close_ios)
+         file_open = .false.
+      end if
+      if (allocated(kpoints)) deallocate(kpoints)
+      if (allocated(kpoint_names)) deallocate(kpoint_names)
+      nkpts = 0
+      kpt_mode = ''
+      if (present(kpoints_are_cartesian)) kpoints_are_cartesian = .false.
+      if (present(error_code)) then
+         error_code = code
+         write(*,*) "Error: ", trim(message)
+      else
+         write(*,*) "Error: ", trim(message)
+         error stop
+      end if
+    end subroutine report_kpoints_error
 
   end subroutine read_kpoints
 
@@ -430,10 +599,14 @@ contains
     end function position_exists
 
     logical function fractional_equal(left, right) result(equal)
-      real(dp), intent(in) :: left(3), right(3)
+      real(dp), intent(in) :: left(:), right(:)
       real(dp) :: diff(3)
 
-      diff(:) = left(:) - right(:)
+      if (size(left) < 3 .or. size(right) < 3) then
+         equal = .false.
+         return
+      end if
+      diff(:) = left(1:3) - right(1:3)
       equal = all(abs(diff(:) - nint(diff(:))) < tol_lattice_integer)
     end function fractional_equal
 
@@ -443,24 +616,31 @@ contains
     real(dp), intent(in) :: lattice(3,3)
     character(len=10) :: pg_name
 
-    real(dp) :: lengths(3), angles(3)
+    real(dp) :: lengths(3), angles(3), cosine_angle
     real(dp) :: tol, angle_tol
     integer :: i, j, k
 
-    tol = 1.0e-3_dp
-    angle_tol = 0.2_dp
+    tol = tol_lattice_metric
+    angle_tol = tol_lattice_angle_deg
 
     ! Calculate lattice parameters
     do i = 1, 3
        lengths(i) = sqrt(sum(lattice(i,:)**2))
     end do
 
+    if (any(lengths <= tol_equal)) then
+       pg_name = "C1"
+       return
+    end if
+
     ! Calculate angles
     do i = 1, 3
        j = mod(i, 3) + 1
        k = mod(i+1, 3) + 1
-       angles(i) = acos(dot_product(lattice(j,:), lattice(k,:)) / &
-                       (lengths(j) * lengths(k))) * 180.0_dp / pi
+       cosine_angle = dot_product(lattice(j,:), lattice(k,:)) / &
+            (lengths(j) * lengths(k))
+       cosine_angle = max(-1.0_dp, min(1.0_dp, cosine_angle))
+       angles(i) = acos(cosine_angle) * 180.0_dp / pi
     end do
 
     ! Detect crystal system and assign point group
@@ -560,8 +740,8 @@ contains
     case default
        ! Try to read as number
        read(name, *, iostat=ios) pgnr
-       if (ios /= 0) then
-          write(*,*) "Warning: Unknown point group '", trim(name), "', using C1"
+       if (ios /= 0 .or. pgnr < 1 .or. pgnr > 36) then
+          write(*,*) "Warning: Invalid point group '", trim(name), "', using C1"
           pgnr = 1
        end if
     end select

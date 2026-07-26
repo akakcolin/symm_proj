@@ -1,9 +1,12 @@
 module time_reversal_optimization
   use accuracy
   use constants
+  use projmat, only: validate_projector_matrix
   implicit none
   private
   public :: mark_kpoints_to_compute, print_tr_optimization_summary
+  public :: verify_spinless_projector_pair
+  public :: build_spinless_partner_projector
 
 contains
 
@@ -62,14 +65,20 @@ contains
   ! 打印时间反演优化的统计信息
   !============================================================================
   subroutine print_tr_optimization_summary(nk, n_computed, n_skipped, n_trim, &
-                                            should_compute, source_kpoint, tr_pairs)
+                                            should_compute, source_kpoint, tr_pairs, &
+                                            optimization_enabled)
     integer, intent(in) :: nk, n_computed, n_skipped, n_trim
     logical, intent(in) :: should_compute(:)
     integer, intent(in) :: source_kpoint(:)
     integer, intent(in) :: tr_pairs(:)
+    logical, intent(in), optional :: optimization_enabled
 
     real(dp) :: potential_speedup
     integer :: ikp, n_pairs
+    logical :: enabled
+
+    enabled = .false.
+    if (present(optimization_enabled)) enabled = optimization_enabled
 
     write(*,*)
     write(*,*) "=========================================="
@@ -81,7 +90,10 @@ contains
     write(*,'(A,I6)') " Total k-points:                ", nk
     write(*,'(A,I6)') " TRIM points (k = -k):          ", n_trim
 
-    n_pairs = (nk - n_trim) / 2
+    n_pairs = 0
+    do ikp = 1, min(nk, size(tr_pairs))
+       if (tr_pairs(ikp) > ikp) n_pairs = n_pairs + 1
+    end do
     if (n_pairs > 0) then
        write(*,'(A,I6,A,I6,A)') " Time-reversal pairs:           ", n_pairs, &
             " pairs (", n_pairs*2, " points)"
@@ -123,13 +135,67 @@ contains
 
     write(*,*)
     write(*,*) "------------------------------------------"
-    write(*,*) "NOTE: Currently computing ALL k-points"
-    write(*,*) "      for verification purposes."
-    write(*,*) "      The above shows potential savings."
+    if (enabled) then
+       write(*,*) "Spinless time-reversal projector reuse is ENABLED."
+       write(*,*) "Copied projectors are validated before use."
+    else
+       write(*,*) "Spinless time-reversal projector reuse is DISABLED."
+    end if
     write(*,*) "------------------------------------------"
     write(*,*)
 
   end subroutine print_tr_optimization_summary
+
+
+  ! Verify the spinless time-reversal relation for full projectors.
+  ! In a real, spin-independent orbital basis, Theta is complex
+  ! conjugation, so P(-k) must equal conjg(P(k)).
+  subroutine verify_spinless_projector_pair(projector_k, projector_minus_k, tol, &
+                                             is_symmetric, max_diff)
+    complex(dp), intent(in) :: projector_k(:,:), projector_minus_k(:,:)
+    real(dp), intent(in) :: tol
+    logical, intent(out) :: is_symmetric
+    real(dp), intent(out) :: max_diff
+
+    integer :: i, j
+
+    is_symmetric = .false.
+    max_diff = huge(1.0_dp)
+    if (size(projector_k, 1) /= size(projector_k, 2) .or. &
+         size(projector_minus_k, 1) /= size(projector_minus_k, 2) .or. &
+         any(shape(projector_k) /= shape(projector_minus_k))) return
+
+    max_diff = 0.0_dp
+    do i = 1, size(projector_k, 1)
+       do j = 1, size(projector_k, 2)
+          max_diff = max(max_diff, abs(projector_minus_k(i,j) - conjg(projector_k(i,j))))
+       end do
+    end do
+    is_symmetric = (max_diff <= tol)
+  end subroutine verify_spinless_projector_pair
+
+
+  subroutine build_spinless_partner_projector(projector_k, tol, projector_minus_k, &
+                                               success, max_residual)
+    complex(dp), intent(in) :: projector_k(:,:)
+    real(dp), intent(in) :: tol
+    complex(dp), allocatable, intent(out) :: projector_minus_k(:,:)
+    logical, intent(out) :: success
+    real(dp), intent(out) :: max_residual
+
+    integer :: alloc_stat
+
+    success = .false.
+    max_residual = huge(1.0_dp)
+    if (tol < 0.0_dp .or. size(projector_k, 1) /= size(projector_k, 2) .or. &
+         size(projector_k, 1) < 1) return
+
+    allocate(projector_minus_k(size(projector_k, 1), size(projector_k, 2)), stat=alloc_stat)
+    if (alloc_stat /= 0) return
+    projector_minus_k = conjg(projector_k)
+    call validate_projector_matrix(projector_minus_k, tol, success, max_residual)
+    if (.not. success) deallocate(projector_minus_k)
+  end subroutine build_spinless_partner_projector
 
 
   !============================================================================
@@ -143,21 +209,17 @@ contains
     real(dp), intent(in) :: tol        ! 容差
     logical, intent(out) :: is_symmetric
 
-    integer :: i, j
     real(dp) :: max_diff
 
-    is_symmetric = .true.
-    max_diff = 0.0_dp
-
-    ! 检查 P(k2) 是否等于 P*(k1)
-    do i = 1, dim1
-       do j = 1, dim2
-          max_diff = max(max_diff, abs(projmatrix(i,j,ikp2) - conjg(projmatrix(i,j,ikp1))))
-          if (abs(projmatrix(i,j,ikp2) - conjg(projmatrix(i,j,ikp1))) > tol) then
-             is_symmetric = .false.
-          end if
-       end do
-    end do
+    if (dim1 /= size(projmatrix, 1) .or. dim2 /= size(projmatrix, 2) .or. &
+         ikp1 < 1 .or. ikp1 > size(projmatrix, 3) .or. &
+         ikp2 < 1 .or. ikp2 > size(projmatrix, 3)) then
+       is_symmetric = .false.
+       max_diff = huge(1.0_dp)
+    else
+       call verify_spinless_projector_pair(projmatrix(:,:,ikp1), projmatrix(:,:,ikp2), tol, &
+            is_symmetric, max_diff)
+    end if
 
     if (.not. is_symmetric) then
        write(*,'(A,I4,A,I4,A,E12.4)') &
