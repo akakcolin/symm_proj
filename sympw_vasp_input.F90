@@ -86,14 +86,15 @@ contains
     integer, allocatable :: nat_per_element(:)
     real(dp), allocatable :: positions(:,:)
     real(dp) :: lattice(3,3), inverse_lattice(3,3), reciprocal_conversion(3,3)
-    real(dp) :: scale
+    real(dp) :: scale_factors(3)
     integer :: input_error, nel, total_atoms, nkpts
     integer :: element_index, atom_index, flat_index, kpoint_index, alloc_stat
+    integer :: cartesian_axis
     logical :: positions_cartesian, kpoints_cartesian
 
     error_code = 0
     comment = ""
-    call read_poscar(poscar_file, comment, scale, lattice, elements, nat_per_element, &
+    call read_poscar(poscar_file, comment, scale_factors, lattice, elements, nat_per_element, &
          positions, positions_cartesian, nel, total_atoms, input_error)
     if (input_error /= 0) then
        error_code = 10 + input_error
@@ -119,8 +120,12 @@ contains
        end do
     end if
     if (kpoints_cartesian) then
-       ! VASP Cartesian KPOINTS are expressed in units of 2*pi/scale.
-       reciprocal_conversion(:, :) = transpose(lattice) / scale
+       ! VASP Cartesian KPOINTS use 2*pi/scale along each Cartesian component.
+       reciprocal_conversion(:, :) = transpose(lattice)
+       do cartesian_axis = 1, 3
+          reciprocal_conversion(cartesian_axis, :) = &
+               reciprocal_conversion(cartesian_axis, :) / scale_factors(cartesian_axis)
+       end do
        do kpoint_index = 1, nkpts
           kpoints(kpoint_index, :) = &
                matmul(kpoints(kpoint_index, :), reciprocal_conversion)

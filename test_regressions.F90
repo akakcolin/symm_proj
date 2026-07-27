@@ -30,7 +30,7 @@ program test_regressions
   integer :: passed, total
   character(len=256) :: poscar_path
   character(len=256) :: comment
-  real(dp) :: scale, lattice(3,3)
+  real(dp) :: scale_factors(3), lattice(3,3)
   character(len=2), allocatable :: elements(:)
   integer, allocatable :: nat_per_elem(:)
   real(dp), allocatable :: positions(:,:)
@@ -48,6 +48,8 @@ program test_regressions
   call test_oversized_metadata(crystal, cell_info, passed, total)
   call test_negative_poscar_scale(passed, total)
   call test_cartesian_poscar_scale(passed, total)
+  call test_anisotropic_poscar_scale(passed, total)
+  call test_invalid_poscar_scale_count(passed, total)
   call test_malformed_poscar_reports_error(passed, total)
   call test_malformed_kpoints_reports_error(passed, total)
   call test_cartesian_kpoints_conversion(passed, total)
@@ -200,7 +202,7 @@ contains
          "Direct"//new_line('a')// &
          "0 0 0"//new_line('a'))
 
-    call read_poscar(poscar_path, comment, scale, lattice, elements, nat_per_elem, &
+    call read_poscar(poscar_path, comment, scale_factors, lattice, elements, nat_per_elem, &
          positions, is_cartesian, nel, total_atoms)
     call check("negative POSCAR scale produces positive volume", &
          abs(abs(determinant3_local(lattice)) - 8.0_dp) < 1.0e-10_dp, sp, tot)
@@ -222,12 +224,62 @@ contains
          "Cartesian"//new_line('a')// &
          "1 0 0"//new_line('a'))
 
-    call read_poscar(poscar_path, comment, scale, lattice, elements, nat_per_elem, &
+    call read_poscar(poscar_path, comment, scale_factors, lattice, elements, nat_per_elem, &
          positions, is_cartesian, nel, total_atoms)
     call check("Cartesian POSCAR coordinates honor scale", &
          maxval(abs(positions(1,:) - [2.0_dp, 0.0_dp, 0.0_dp])) < 1.0e-10_dp, sp, tot)
     call cleanup_poscar_inputs()
   end subroutine test_cartesian_poscar_scale
+
+
+  subroutine test_anisotropic_poscar_scale(sp, tot)
+    integer, intent(inout) :: sp, tot
+
+    poscar_path = "/tmp/symm_proj_regression_anisotropic.POSCAR"
+    call write_text_file(poscar_path, &
+         "anisotropic scale"//new_line('a')// &
+         "2.0 3.0 4.0"//new_line('a')// &
+         "1 0 0"//new_line('a')// &
+         "0 1 0"//new_line('a')// &
+         "0 0 1"//new_line('a')// &
+         "Si"//new_line('a')// &
+         "1"//new_line('a')// &
+         "Cartesian"//new_line('a')// &
+         "1 1 1"//new_line('a'))
+
+    call read_poscar(poscar_path, comment, scale_factors, lattice, elements, nat_per_elem, &
+         positions, is_cartesian, nel, total_atoms)
+    call check("three-component POSCAR scale acts on Cartesian lattice components", &
+         maxval(abs(lattice - reshape([2.0_dp, 0.0_dp, 0.0_dp, &
+                                      0.0_dp, 3.0_dp, 0.0_dp, &
+                                      0.0_dp, 0.0_dp, 4.0_dp], [3,3]))) < 1.0e-10_dp, sp, tot)
+    call check("three-component POSCAR scale acts on Cartesian atom components", &
+         maxval(abs(positions(1,:) - [2.0_dp, 3.0_dp, 4.0_dp])) < 1.0e-10_dp, sp, tot)
+    call cleanup_poscar_inputs()
+  end subroutine test_anisotropic_poscar_scale
+
+
+  subroutine test_invalid_poscar_scale_count(sp, tot)
+    integer, intent(inout) :: sp, tot
+    integer :: parse_error
+
+    poscar_path = "/tmp/symm_proj_regression_two_scales.POSCAR"
+    call write_text_file(poscar_path, &
+         "invalid scale count"//new_line('a')// &
+         "2.0 3.0"//new_line('a')// &
+         "1 0 0"//new_line('a')// &
+         "0 1 0"//new_line('a')// &
+         "0 0 1"//new_line('a')// &
+         "Si"//new_line('a')// &
+         "1"//new_line('a')// &
+         "Direct"//new_line('a')// &
+         "0 0 0"//new_line('a'))
+
+    call read_poscar(poscar_path, comment, scale_factors, lattice, elements, nat_per_elem, &
+         positions, is_cartesian, nel, total_atoms, parse_error)
+    call check("POSCAR rejects a two-value scale line", parse_error /= 0, sp, tot)
+    call cleanup_poscar_inputs()
+  end subroutine test_invalid_poscar_scale_count
 
   subroutine test_malformed_poscar_reports_error(sp, tot)
     integer, intent(inout) :: sp, tot
@@ -236,7 +288,7 @@ contains
     poscar_path = "/tmp/symm_proj_regression_malformed.POSCAR"
     call write_text_file(poscar_path, "incomplete POSCAR"//new_line('a'))
 
-    call read_poscar(poscar_path, comment, scale, lattice, elements, nat_per_elem, &
+    call read_poscar(poscar_path, comment, scale_factors, lattice, elements, nat_per_elem, &
          positions, is_cartesian, nel, total_atoms, parse_error)
     call check("malformed POSCAR reports a parse error", parse_error /= 0, sp, tot)
     call check("malformed POSCAR leaves no element allocation", .not. allocated(elements), sp, tot)
@@ -284,7 +336,7 @@ contains
     kpoints_path = "/tmp/symm_proj_regression_cartesian.KPOINTS"
     call write_text_file(poscar_path, &
          "cartesian k-point scale"//new_line('a')// &
-         "2.0"//new_line('a')// &
+         "2.0 3.0 4.0"//new_line('a')// &
          "1 0 0"//new_line('a')// &
          "0 2 0"//new_line('a')// &
          "0 0 3"//new_line('a')// &
@@ -304,11 +356,11 @@ contains
          loaded_crystal, loaded_kpoints, loaded_names, loaded_comment, input_error)
     call check("standard Cartesian KPOINTS input is accepted", input_error == 0, sp, tot)
     if (input_error == 0) then
-       call check("Cartesian KPOINTS honors the effective POSCAR scale", &
+       call check("Cartesian KPOINTS honors the effective POSCAR scales", &
             maxval(abs(loaded_kpoints(1,:) - [0.25_dp, 0.50_dp, 0.0_dp])) < 1.0e-10_dp, &
             sp, tot)
     else
-       call check("Cartesian KPOINTS honors the effective POSCAR scale", .false., sp, tot)
+       call check("Cartesian KPOINTS honors the effective POSCAR scales", .false., sp, tot)
     end if
 
     if (allocated(loaded_kpoints)) deallocate(loaded_kpoints)

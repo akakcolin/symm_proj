@@ -22,11 +22,11 @@ module vasp_reader
 
 contains
 
-  subroutine read_poscar(filename, comment, scale, lattice, elements, &
+  subroutine read_poscar(filename, comment, scale_factors, lattice, elements, &
                         nat_per_elem, positions, is_cartesian, nel, total_atoms, error_code)
     character(len=*), intent(in) :: filename
     character(len=256), intent(out) :: comment
-    real(dp), intent(out) :: scale
+    real(dp), intent(out) :: scale_factors(3)
     real(dp), intent(out) :: lattice(3,3)
     character(len=2), allocatable, intent(out) :: elements(:)
     integer, allocatable, intent(out) :: nat_per_elem(:)
@@ -35,15 +35,15 @@ contains
     integer, intent(out) :: nel, total_atoms
     integer, optional, intent(out) :: error_code
 
-    integer :: fh, ios, i
+    integer :: fh, ios, i, scale_count
     character(len=256) :: line
     character(len=1) :: coord_type
-    real(dp) :: raw_volume, scale_factor
+    real(dp) :: raw_volume, uniform_scale, input_scale_factors(3)
     logical :: file_open
 
     if (present(error_code)) error_code = 0
     comment = ''
-    scale = 0.0_dp
+    scale_factors(:) = 0.0_dp
     lattice(:, :) = 0.0_dp
     is_cartesian = .false.
     nel = 0
@@ -64,10 +64,15 @@ contains
        return
     end if
 
-    ! Line 2: Scale factor
-    read(fh, *, iostat=ios) scale
+    ! Line 2: One universal scale or three Cartesian component scales.
+    read(fh, '(A)', iostat=ios) line
     if (ios /= 0) then
        call report_poscar_error(3, "POSCAR scale factor is missing or invalid")
+       return
+    end if
+    call parse_poscar_scale_line(line, input_scale_factors, scale_count, ios)
+    if (ios /= 0) then
+       call report_poscar_error(3, "POSCAR scale line must contain one or three numeric values")
        return
     end if
 
@@ -87,16 +92,26 @@ contains
        call report_poscar_error(5, "POSCAR lattice has zero volume")
        return
     end if
-    if (abs(scale) <= tol_equal) then
-       call report_poscar_error(6, "POSCAR scale factor must be nonzero")
-       return
-    else if (scale < 0.0_dp) then
-       scale_factor = (abs(scale) / raw_volume)**(1.0_dp / 3.0_dp)
+    if (scale_count == 1) then
+       if (abs(input_scale_factors(1)) <= tol_equal) then
+          call report_poscar_error(6, "POSCAR scale factor must be nonzero")
+          return
+       else if (input_scale_factors(1) < 0.0_dp) then
+          uniform_scale = (abs(input_scale_factors(1)) / raw_volume)**(1.0_dp / 3.0_dp)
+       else
+          uniform_scale = input_scale_factors(1)
+       end if
+       scale_factors(:) = uniform_scale
     else
-       scale_factor = scale
+       if (any(input_scale_factors <= tol_equal)) then
+          call report_poscar_error(6, "Three-component POSCAR scale factors must be positive")
+          return
+       end if
+       scale_factors(:) = input_scale_factors(:)
     end if
-    lattice(:, :) = lattice(:, :) * scale_factor
-    scale = scale_factor
+    do i = 1, 3
+       lattice(:, i) = lattice(:, i) * scale_factors(i)
+    end do
 
     ! Line 6: Element names
     read(fh, '(A)', iostat=ios) line
@@ -176,7 +191,11 @@ contains
           return
        end if
     end do
-    if (is_cartesian) positions(:, :) = positions(:, :) * scale_factor
+    if (is_cartesian) then
+       do i = 1, 3
+          positions(:, i) = positions(:, i) * scale_factors(i)
+       end do
+    end if
 
     close(fh)
     file_open = .false.
@@ -199,6 +218,41 @@ contains
     write(*,*)
 
   contains
+
+    subroutine parse_poscar_scale_line(text, values, value_count, parse_status)
+      character(len=*), intent(in) :: text
+      real(dp), intent(out) :: values(3)
+      integer, intent(out) :: value_count, parse_status
+
+      real(dp) :: extra_value
+
+      values(:) = 0.0_dp
+      value_count = 0
+      read(text, *, iostat=parse_status) values(1)
+      if (parse_status /= 0) return
+      read(text, *, iostat=parse_status) values(1:2)
+      if (parse_status < 0) then
+         value_count = 1
+         parse_status = 0
+         return
+      else if (parse_status > 0) then
+         return
+      end if
+      read(text, *, iostat=parse_status) values(1:3)
+      if (parse_status < 0) then
+         parse_status = 1
+         return
+      else if (parse_status > 0) then
+         return
+      end if
+      read(text, *, iostat=parse_status) values(1:3), extra_value
+      if (parse_status < 0) then
+         value_count = 3
+         parse_status = 0
+      else
+         parse_status = 1
+      end if
+    end subroutine parse_poscar_scale_line
 
     subroutine report_poscar_error(code, message)
       integer, intent(in) :: code
